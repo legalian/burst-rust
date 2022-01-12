@@ -59,7 +59,6 @@ impl<'a,T> Iterator for ClusterIterMut<'a,T> {
     type Item = (&'a mut T,usize);
     fn next(&mut self) -> Option<Self::Item> {
         self.i.map(|x|{
-            println!("unsafe reached. -=-=-=-=-=-=-=-=-=-=-=-=-=-=- ");
             let (t,_,r) = unsafe {
                 &mut *self.cl.cluster.as_mut_ptr().add(x)
             };

@@ -19,7 +19,6 @@ impl<'a,E,A:VerySimple,B:VerySimple,I:Iterator<Item=usize>> Iterator for GraphMu
             //i can garauntee that the same mutable pointer
             //won't be yielded twice, but the proof is non-trivial so
             //i can't prove it to the type system.
-            println!("unsafe reached. -=-=-=-=-=-=-=-=-=-=-=-=-=-=- ");
             let GraphBox{e,..} = unsafe {
                 &mut *self.alc.as_mut_ptr().add(x)
             };
@@ -36,7 +35,6 @@ impl<'a,A:VerySimple,B:VerySimple,E> Iterator for GraphMutA<'a,A,B,E> {
     type Item = (&'a mut E,usize,B);
     fn next(&mut self) -> Option<Self::Item> {
         self.start.map(|x|{
-            println!("unsafe reached. -=-=-=-=-=-=-=-=-=-=-=-=-=-=- ");
             let GraphBox{e,right:n,b,..} = unsafe {
                 &mut *self.alc.as_mut_ptr().add(x)
             };
@@ -53,7 +51,6 @@ impl<'a,A:VerySimple,B:VerySimple,E> Iterator for GraphMutB<'a,A,B,E> {
     type Item = (&'a mut E,usize,A);
     fn next(&mut self) -> Option<Self::Item> {
         self.start.map(|x|{
-            println!("unsafe reached. -=-=-=-=-=-=-=-=-=-=-=-=-=-=- ");
             let GraphBox{e,down:n,a,..} = unsafe {
                 &mut *self.alc.as_mut_ptr().add(x)
             };
