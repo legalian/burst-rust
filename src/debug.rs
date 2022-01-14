@@ -2,7 +2,7 @@
 use crate::dsl::{Dsl,ExpressionContext};
 use crate::mlsparser::{Program,Value,Type};
 use crate::nftabuilder::{ExpressionBuilder,ProcType,ProcValue};
-use crate::ntfa::{NTFA};
+// use crate::ntfa::{NTFA};
 use core::fmt::{Debug,Formatter,Error};
 use std::collections::HashSet;
 use std::rc::Rc;
@@ -87,30 +87,30 @@ impl<'a> Debug for AcceptingStates<'a> {
     }
 }
 
-impl Debug for NTFA {
-    fn fmt(&self, f: &mut Formatter) -> Result<(),Error> {
-        let mut builder = f.debug_list();
-        for (tok,ss) in &self.nullary {
-            if ss.len()==0 {panic!("empty entry")}
-            for s in ss {
-                builder.entry(&NTFAline{token:*tok,arglist:vec![],fin:number_to_string(*s)});
-            }
-        }
-        for (fst,ab) in &self.rules {
-            if ab.len()==0 {panic!("empty entry")}
-            for (tok,possiblerest) in ab {
-                if possiblerest.len()==0 {panic!("empty entry")}
-                for rest in possiblerest {
-                    let mut r = rest.clone();
-                    let last = r.pop().unwrap();
-                    r.insert(0,*fst);
-                    builder.entry(&NTFAline{token:*tok,arglist:r.into_iter().map(number_to_string).collect(),fin:number_to_string(last)});
-                }
-            }
-        }
-        builder.finish()
-    }
-}
+// impl Debug for NTFA {
+//     fn fmt(&self, f: &mut Formatter) -> Result<(),Error> {
+//         let mut builder = f.debug_list();
+//         for (tok,ss) in &self.nullary {
+//             if ss.len()==0 {panic!("empty entry")}
+//             for s in ss {
+//                 builder.entry(&NTFAline{token:*tok,arglist:vec![],fin:number_to_string(*s)});
+//             }
+//         }
+//         for (fst,ab) in &self.rules {
+//             if ab.len()==0 {panic!("empty entry")}
+//             for (tok,possiblerest) in ab {
+//                 if possiblerest.len()==0 {panic!("empty entry")}
+//                 for rest in possiblerest {
+//                     let mut r = rest.clone();
+//                     let last = r.pop().unwrap();
+//                     r.insert(0,*fst);
+//                     builder.entry(&NTFAline{token:*tok,arglist:r.into_iter().map(number_to_string).collect(),fin:number_to_string(last)});
+//                 }
+//             }
+//         }
+//         builder.finish()
+//     }
+// }
 
 
 
