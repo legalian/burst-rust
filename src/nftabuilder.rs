@@ -9,6 +9,7 @@ use crate::ntfa::{*};
 use crate::spec::{*};
 use crate::dsl::{*};
 use crate::queue::{*};
+use crate::debug::{*};
 use Dsl::{*};
 
 pub enum ProcType {
@@ -37,6 +38,14 @@ pub struct FunctionEntry {
     argtypes:Vec<usize>,
     restype:usize
 }
+
+pub enum Constname {
+    LRSplit(Box<Constname>,Box<Constname>),
+    NullaryName(String),
+    UnaryName(String),
+}
+
+
 pub struct ExpressionBuilder {
     functions:Vec<FunctionEntry>,
     functionmemo:HashMap<(usize,Box<[usize]>),usize>,
@@ -57,7 +66,8 @@ pub struct ExpressionBuilder {
     pub falseval:Option<usize>,
     pub trueval:Option<usize>,
     
-    pub debug_type_names:HashMap<usize,String>
+    pub debug_type_names:HashMap<usize,String>,
+    pub debug_constr_names:HashMap<usize,Constname>,//type,value
 }
 impl ExpressionBuilder {
     pub fn new()->ExpressionBuilder {
@@ -81,7 +91,8 @@ impl ExpressionBuilder {
             falseval:None,
             trueval:None,
 
-            debug_type_names:HashMap::new()
+            debug_type_names:HashMap::new(),
+            debug_constr_names:HashMap::new()
         }
     }
 
@@ -224,15 +235,16 @@ impl NTFABuilder {
         outputs:&HashMap<usize,BaseLiteral>,output_type:usize,
         confirmer:&Confirmer,
         previous_accepting_states:&mut HashMap<usize,HashSet<usize>>,
+        graph_buffer : &mut HashMap<usize,Option<(usize,ValueMapper)>>,
         k:usize
-    )->(Option<(usize,ValueMapper)>,HashSet<usize>) {
+    )->Option<(usize,ValueMapper)> {
+        println!("-=-=-=-=-=-=-=-=-=- BEGINNING BUILD PHASE: {:?}",DebugTypedValue{val:input,ty:input_type,expr:builder});
         #[derive(Default)]
         struct StackElem {
             input : usize,
             output : Option<BaseLiteral>,
             res : PartialNTFA,
-            single_dedup : HashSet<usize>,
-            processed : HashSet<usize>,
+            processed : HashMap<usize,usize>,
             processed_rel : HashMap<usize,Vec<(usize,usize)>>,
             queue : BinaryHeap<QueueElem<(usize,Vec<usize>)>>,
             visited : HashMap<(usize,usize),usize>,
@@ -284,6 +296,7 @@ impl NTFABuilder {
                 input,
                 output:outputs.get(&input).cloned(),
                 queue:queue,
+                res,
                 ..Default::default()
             }
         }
@@ -293,12 +306,10 @@ impl NTFABuilder {
             outputs,
             builder
         )];
-        let mut should_be_sorta_global_memo : HashMap<usize,(Option<(usize,ValueMapper)>,HashSet<usize>)> = HashMap::new();
         'stackloop: while let Some(StackElem{
             input,
             output,
             res,
-            single_dedup,
             processed,
             processed_rel,
             queue,
@@ -312,8 +323,8 @@ impl NTFABuilder {
                 if *size>=k {break;}
                 for xt in xtl.iter() {
                     if *xt == input_type && builder.values[input].1>builder.values[x].1 {
-                        panic!();
                         if !previous_accepting_states.contains_key(&x) {
+                            println!("back to the drawing board. From {:?} to {:?}",DebugTypedValue{val:input,ty:input_type,expr:builder},DebugTypedValue{val:x,ty:input_type,expr:builder});
                             stack.push(new_stack_elem(
                                 x,
                                 input_type,
@@ -422,6 +433,7 @@ impl NTFABuilder {
                                 cartesian=swap_buf;
                             }
                             for (cart,csize) in cartesian.into_iter() {
+                                if csize>=k {continue;}
                                 let exec = builder.exec_function(*f_ind,cart.clone());
                                 res.add_rule(11+*f_ind,cart,exec);
                                 queue.push(QueueElem{item:(exec,vec![restype]),priority:csize+1});
@@ -434,9 +446,10 @@ impl NTFABuilder {
                             let r = match &builder.types[*w] {PairType(_,r)=>r,_=>panic!()};
                             if let Some(v) = processed_rel.get(&r) {
                                 for (u,usi) in v.iter() {
+                                    if *usi+size>=k {continue;}
                                     let merged = builder.get_pair(x,*u);
                                     res.add_rule(2,vec![x,*u],merged);
-                                    queue.push(QueueElem{item:(merged,vec![*w]),priority:usi+size+1});
+                                    queue.push(QueueElem{item:(merged,vec![*w]),priority:*usi+size+1});
                                 }
                             }
                         }
@@ -447,18 +460,19 @@ impl NTFABuilder {
                             let l = match &builder.types[*w] {PairType(l,_)=>l,_=>panic!()};
                             if let Some(v) = processed_rel.get(&l) {
                                 for (u,usi) in v.iter() {
+                                    if *usi+size>=k {continue;}
                                     let merged = builder.get_pair(*u,x);
                                     res.add_rule(2,vec![*u,x],merged);
-                                    queue.push(QueueElem{item:(merged,vec![*w]),priority:usi+size+1});
+                                    queue.push(QueueElem{item:(merged,vec![*w]),priority:*usi+size+1});
                                 }
                             }
                         }
                     }
                 }
-                if !single_dedup.contains(&x) {
-                    single_dedup.insert(x);
-                    processed.insert(x);
-                    for y in processed.iter() {
+                if !processed.contains_key(&x) {
+                    processed.insert(x,size);
+                    for (y,ysize) in processed.iter() {
+                        if *ysize+size>=k {continue;}
                         match &builder.values[*y].0 {
                             LValue(_)=>{res.add_rule(9,vec![*y,x,0],x);}
                             RValue(_)=>{res.add_rule(9,vec![*y,0,x],x);}
@@ -481,22 +495,13 @@ impl NTFABuilder {
                 accepting_states,
                 ..
             } = stack.pop().unwrap();
-            println!("DOING A THING");
-            should_be_sorta_global_memo.insert(input,(res.convert(self,&accepting_states),accepting_states));
+            // println!("{:?} resulted in: {:#?}",DebugValue{t:input,expr:builder},res);
+            graph_buffer.insert(input,res.convert(self,&accepting_states));
+            previous_accepting_states.insert(input,accepting_states);
         }
-        let ss = should_be_sorta_global_memo.remove(&input).unwrap();
-        println!("removing: {:?}",ss.1); ss
-        
+        graph_buffer.remove(&input).unwrap()
     }
 }
-
-
-
-
-
-
-
-
 
 
 

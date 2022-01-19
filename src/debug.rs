@@ -1,8 +1,8 @@
 
 use crate::dsl::{Dsl,ExpressionContext};
 use crate::mlsparser::{Program,Value,Type};
-use crate::nftabuilder::{ExpressionBuilder,ProcType,ProcValue};
-// use crate::ntfa::{NTFA};
+use crate::nftabuilder::{ExpressionBuilder,ProcType,ProcValue,Constname};
+use crate::ntfa::{PartialNTFA};
 use core::fmt::{Debug,Formatter,Error};
 use std::collections::HashSet;
 use std::rc::Rc;
@@ -12,7 +12,7 @@ use Value::{*};
 use Type::{*};
 use ProcType::{*};
 use ProcValue::{*};
-
+use Constname::{*};
 
 
 
@@ -87,38 +87,19 @@ impl<'a> Debug for AcceptingStates<'a> {
     }
 }
 
-// impl Debug for NTFA {
-//     fn fmt(&self, f: &mut Formatter) -> Result<(),Error> {
-//         let mut builder = f.debug_list();
-//         for (tok,ss) in &self.nullary {
-//             if ss.len()==0 {panic!("empty entry")}
-//             for s in ss {
-//                 builder.entry(&NTFAline{token:*tok,arglist:vec![],fin:number_to_string(*s)});
-//             }
-//         }
-//         for (fst,ab) in &self.rules {
-//             if ab.len()==0 {panic!("empty entry")}
-//             for (tok,possiblerest) in ab {
-//                 if possiblerest.len()==0 {panic!("empty entry")}
-//                 for rest in possiblerest {
-//                     let mut r = rest.clone();
-//                     let last = r.pop().unwrap();
-//                     r.insert(0,*fst);
-//                     builder.entry(&NTFAline{token:*tok,arglist:r.into_iter().map(number_to_string).collect(),fin:number_to_string(last)});
-//                 }
-//             }
-//         }
-//         builder.finish()
-//     }
-// }
 
-
-
-
-
-
-
-
+impl Debug for PartialNTFA {
+    fn fmt(&self, f: &mut Formatter) -> Result<(),Error> {
+        let mut builder = f.debug_list();
+        for (last,ab) in &self.rules {
+            if ab.len()==0 {panic!("empty entry")}
+            for (tok,rest) in ab {
+                builder.entry(&NTFAline{token:*tok,arglist:rest.iter().copied().map(number_to_string).collect(),fin:number_to_string(*last)});
+            }
+        }
+        builder.finish()
+    }
+}
 
 
 
@@ -173,9 +154,101 @@ impl<'a> Debug for DebugType<'a> {
 }
 
 
+
+pub struct DebugTypedValue<'a> {
+    pub val:usize,
+    pub ty:usize,
+    pub expr:&'a ExpressionBuilder
+}
+impl<'a> Debug for DebugTypedValue<'a> {
+    fn fmt(&self, f: &mut Formatter) -> Result<(),Error> {
+        match (&self.expr.values[self.val].0,&self.expr.types[self.ty]) {
+            (PairValue(a,b),PairType(at,bt))=>{
+                let mut builder = f.debug_tuple("");
+                builder.field(&DebugTypedValue{val:*a,ty:*at,expr:self.expr});
+                let mut val=*b;
+                let mut ty=*bt;
+                loop {
+                    match (&self.expr.values[val].0,&self.expr.types[ty]) {
+                        (PairValue(a,b),PairType(at,bt))=>{
+                            builder.field(&DebugTypedValue{val:*a,ty:*at,expr:self.expr});
+                            val=*b;ty=*bt;
+                        }
+                        _=>{
+                            builder.field(&DebugTypedValue{val:val,ty:ty,expr:self.expr});
+                            break;
+                        }
+                    }
+                }
+                builder.finish()
+            }
+            (LValue(_)|RValue(_),_)=>{
+                match self.expr.debug_constr_names.get(&self.ty) {
+                    None=>match (&self.expr.values[self.val].0,&self.expr.types[self.ty]) {
+                        (LValue(a),LRType(at,_))=>{
+                            let mut builder = f.debug_tuple("LValue");
+                            builder.field(&DebugTypedValue{val:*a,ty:*at,expr:self.expr});
+                            builder.finish()
+                        }
+                        (RValue(a),LRType(_,at))=>{
+                            let mut builder = f.debug_tuple("RValue");
+                            builder.field(&DebugTypedValue{val:*a,ty:*at,expr:self.expr});
+                            builder.finish()
+                        }
+                        _=>panic!()
+                    }
+                    Some(mut x)=>{
+                        let mut val=self.val;
+                        let mut ty=self.ty;
+                        loop {
+                            match x {
+                                NullaryName(x)=>{break f.write_str(x)}
+                                UnaryName(x)=>{
+                                    let mut builder = f.debug_tuple(x);
+                                    loop {
+                                        match (&self.expr.values[val].0,&self.expr.types[ty]) {
+                                            (PairValue(a,b),PairType(at,bt))=>{
+                                                builder.field(&DebugTypedValue{val:*a,ty:*at,expr:self.expr});
+                                                val=*b;ty=*bt;
+                                            }
+                                            _=>{
+                                                builder.field(&DebugTypedValue{val:val,ty:ty,expr:self.expr});
+                                                break;
+                                            }
+                                        }
+                                    }
+                                    break builder.finish()
+                                }
+                                LRSplit(b,c)=>match (&self.expr.values[val].0,&self.expr.types[ty]) {
+                                    (LValue(a),LRType(at,_))=>{val=*a;ty=*at;x=b;}
+                                    (RValue(a),LRType(_,at))=>{val=*a;ty=*at;x=c;}
+                                    _=>panic!()
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            (FuncAsValue(a),_)=>{
+                let mut builder = f.debug_tuple("FuncAsValue");
+                builder.field(&a);
+                builder.finish()
+            }
+            (UnitValue,UnitType)=>f.write_str("Unit"),
+            (Uneval,_)=>f.write_str("Uneval"),
+            _=>panic!()
+        }
+    }
+}
+
+
+
+
+
+
 pub struct DebugValue<'a> {
-    t:usize,
-    expr:&'a ExpressionBuilder
+    pub t:usize,
+    pub expr:&'a ExpressionBuilder
 }
 impl<'a> Debug for DebugValue<'a> {
     fn fmt(&self, f: &mut Formatter) -> Result<(),Error> {

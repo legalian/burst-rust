@@ -22,6 +22,7 @@ use ProcValue::{*};
 use ProcType::{*};
 use SpecVariant::{*};
 use RefineLiteral::{*};
+use Constname::{*};
 
 
 
@@ -467,6 +468,7 @@ impl FileInterpreter {
                 let cln = constructors.len();
                 if cln==0 {panic!()}
                 let mut obby : Option<usize> = None;
+                let mut cstrnames : Option<Constname> = None;
                 let mut interim = Vec::new();
                 for (i,(cstr,l)) in constructors.into_iter().enumerate().rev() {
                     let isl = l.is_some();
@@ -516,6 +518,18 @@ impl FileInterpreter {
                             if !ttt {obby = Some(self.expr.get_lr_type(bb,x));}
                         }
                     }
+                    match cstrnames {
+                        None => {cstrnames=Some(if isl
+                            {UnaryName(String::from(cstr))} else
+                            {NullaryName(String::from(cstr))}
+                        );}
+                        Some(x) => {
+                            cstrnames=Some(LRSplit(Box::new(if isl
+                                {UnaryName(String::from(cstr))} else
+                                {NullaryName(String::from(cstr))}),
+                            Box::new(x)));
+                        }
+                    }
                 }
                 for (a,b,c) in interim {
                     let ntype = match c {
@@ -524,6 +538,7 @@ impl FileInterpreter {
                     };
                     self.functions.insert(a,(b,ntype));
                 }
+                self.expr.debug_constr_names.insert(obby.unwrap(),cstrnames.unwrap());
                 self.types.insert(name.to_string(),obby.unwrap());
                 self.expr.debug_type_names.insert(obby.unwrap(),name.to_string());
             }

@@ -10,32 +10,6 @@ use std::rc::Rc;
 use RefineLiteral::{*};
 use crate::debug::{*};
 
-fn determine_visit_order(_builder:&ExpressionBuilder,states:&HashMap<usize,BaseLiteral>)->Vec<usize> {
-    states.keys().copied().collect()
-    // let mut visited : HashSet<usize> = HashSet::new();
-    // let mut stack : Vec<usize> = Vec::new();
-    // let mut order : Vec<usize> = Vec::new();
-    // for key in states.keys() {
-    //     if visited.contains(key) {continue;}
-    //     stack.push(*key);
-    //     while let Some(x) = stack.last() {
-    //         if visited.contains(key) {continue;}
-    //         match &builder.values[*x].0 {
-    //             PairValue(a,b)=>{
-    //                 if !visited.contains(&a) {stack.push(*a)}
-    //                 else if !visited.contains(&b) {stack.push(*b)}
-    //                 else {visited.insert(*x);order.push(*x);stack.pop();}
-    //             }
-    //             LValue(a)|RValue(a)=>{
-    //                 if !visited.contains(a) {stack.push(*a)}
-    //                 else {visited.insert(*x);order.push(*x);stack.pop();}
-    //             }
-    //             _=>{visited.insert(*x);order.push(*x);stack.pop();}
-    //         }
-    //     }
-    // } order
-}
-
 
 pub fn synthesize(
     mut exprbuilder:ExpressionBuilder,
@@ -50,35 +24,37 @@ pub fn synthesize(
     while let Some(QueueElem{ item:mut spec, .. }) = heap.pop() {
         'specloop: while let Some(states) = spec.get_next() {
             println!("Found one option");
-            let order = determine_visit_order(&exprbuilder,&states);
+            let mut graph_buffer : HashMap<usize,Option<(usize,ValueMapper)>> = HashMap::new();
             let mut accepting_states : HashMap<usize,HashSet<usize>> = HashMap::new();
             let mut opntfa : Option<usize> = None;
             let mut tables : Vec<ValueMapper> = Vec::new();
+            let mut order = states.keys().copied().collect::<Vec<_>>();
+            order.sort_unstable_by_key(|x|exprbuilder.values[*x].1);
             for a in order {
                 println!("Evaluating one literal");
-                let (newstate,newaccepting) = ntfabuilder.build_ntfa(
+                let newstate = ntfabuilder.build_ntfa(
                     &mut exprbuilder,
                     a,input_type,
                     &states,output_type,
                     &confirmer,
                     &mut accepting_states,
-                    7
+                    &mut graph_buffer,
+                    14
                 );
+                println!("built!");
                 if newstate.is_none() {
                     //mark into omega
                     println!("No accepting states after ntfa built");
                     if !spec.increment() {break 'specloop}
                     continue 'specloop
                 }
-                // println!("just built ntfa: {:#?} {:?}",newstate,AcceptingStates{s:&newaccepting});
                 let (newntfa,newmapping) = newstate.unwrap();
-                accepting_states.insert(a,newaccepting);
                 tables.push(newmapping);
                 opntfa = match opntfa {
                     None=>Some(newntfa),
                     Some(oldstate)=>{
+                        println!("intersecting...");
                         if let Some(intstate) = ntfabuilder.intersect(newntfa,oldstate) {
-                            // println!("just intersected ntfa: {:#?} {:?}",intstate,AcceptingStates{s:&intacc});
                             Some(intstate)
                         } else {
                             //mark into omega

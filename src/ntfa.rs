@@ -349,7 +349,7 @@ impl ValueMapper {
 }
 #[derive(Default)]
 pub struct PartialNTFA {
-    rules:HashMap<usize,Vec<(usize,Vec<usize>)>>,
+    pub rules:HashMap<usize,Vec<(usize,Vec<usize>)>>,
     vm:ValueMapper
 }
 impl PartialNTFA {
