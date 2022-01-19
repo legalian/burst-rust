@@ -59,9 +59,9 @@ pub fn synthesize(
                 let (newstate,newaccepting) = ntfabuilder.build_ntfa(
                     &mut exprbuilder,
                     a,input_type,
-                    states.get(&a).cloned(),output_type,
+                    &states,output_type,
                     &confirmer,
-                    &accepting_states,
+                    &mut accepting_states,
                     7
                 );
                 if newstate.is_none() {
@@ -92,7 +92,6 @@ pub fn synthesize(
             let ntfa = opntfa.unwrap();
             let solution_list = ntfabuilder.get_accepting_run(ntfa,&mut exprbuilder,&tables);
             if solution_list.len()>0 {
-
                 for (solution,solsize,witness) in solution_list {
                     println!("PARTIAL SOLUTION FOUND: {:#?}  {:?} {:?}",EnhancedPrintDsl{dsl:&solution,expr:&exprbuilder},witness,solsize);
                 }

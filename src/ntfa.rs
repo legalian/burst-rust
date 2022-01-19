@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 use std::collections::HashSet;
-use std::collections::VecDeque;
+// use std::collections::VecDeque;
 use std::collections::BinaryHeap;
 use std::collections::hash_map::Entry::*;
 use std::rc::Rc;
@@ -140,225 +140,57 @@ impl NTFABuilder {
         map:&[ValueMapper]
     ) -> Vec<(Dsl,usize,HashMap<usize,usize>)> {
         let mut queue : BinaryHeap<SolutionStatusWrap> = BinaryHeap::new();
-        queue.push(DownElem(start,0));
+        queue.push(SolutionStatusWrap(start,0,None));
         let mut solns : HashMap<usize,Vec<Rc<SolutionStatus>>> = HashMap::new();
-        let mut working : HashMap<usize,Vec<(&[usize],Vec<Rc<SolutionStatus>>,usize)>> = HashMap::new();
+        let mut working : HashMap<usize,Vec<(&[usize],Vec<Rc<SolutionStatus>>,usize,usize,usize)>> = HashMap::new();
         let mut visited : HashSet<usize> = HashSet::new();
-        while let Some(x) = queue.pop() {
-            match x {
-                DownElem(x,minsize)=>{
+        while let Some(SolutionStatusWrap(x,minsize,updown)) = queue.pop() {
+            let mut stack:Vec<(&[usize],Vec<Rc<SolutionStatus>>,usize,usize,usize)> = Vec::new();
+            match updown {
+                None=>{
                     if !visited.insert(x) {continue;}
                     let y = &self.paths[x];
                     if let Some((f,_)) = y.iter().find(|(_,x)|x.len()==0) {
                         for sol in SolutionStatus::transfix(*f,&vec![],map,builder) {
-                            queue.push(UpElem(x,minsize+sol.size,sol));
+                            queue.push(SolutionStatusWrap(x,minsize+1,Some(sol)));
                         }
                     } else {
                         for (f,l) in y.iter() {
                             if l.contains(&x) {continue;}
-                            queue.push(DownElem(l[0],minsize+1));
-                            let mut stack = vec![(&l,Vec::<Rc<SolutionStatus>>::new(),*f)];
-                            while let Some((l,v,f)) = stack.pop() {
-                                if l.len()==0 {
-                                    for sol in SolutionStatus::transfix(f,&v,map,builder) {
-                                        queue.push(UpElem(x,minsize+sol.size,sol));
-                                    }
-                                }
-                                working.entry(l[0]).or_default().push((&l[1..],v,f));
-
-                            }
-                            // while l.len()>0 {
-                            //     l[0]
-                            // }
-
+                            stack.push((l,Vec::new(),*f,x,1+minsize));
                         }
                     }
                 }
-                UpElem(x,minsize,sol)=>{
-                    if !sol.insert(solns.entry(x).or_default()) {continue;}
-                    // for (l,v,f) in working.get(&x).into_iter().flatten().collect::<Vec<_>>() {
-                    //     let l=*l; let f=*f;
-                    //     if l.len()>0 {
-                    //         working.entry(l[0]).or_default().push((l,vec![],f));
-
-                    //     } else {
-
-                    //     }
-
-                    // }
+                Some(sol)=>{
+                    let sol = match sol.insert(solns.entry(x).or_default()) {None=>{continue;},Some(x)=>x};
+                    for (l,v,f,y,minsize) in working.get(&x).into_iter().flatten() {
+                        let mut v2=v.clone();
+                        v2.push(sol.clone());
+                        stack.push((l,v2,*f,*y,minsize+sol.size));
+                    }
                 }
             }
-            // let new_working = match working.entry(x) {
-            //     Occupied(_)=>{continue;}
-            //     Vacant(x)=>{x.insert(vec![])}
-            // };
-            // let y = &self.paths[x];
-            // if let Some((f,_)) = y.iter().find(|(_,x)|x.len()==0) {
-            //     SolutionStatus::transfix(*f,&vec![],map,builder);
-            // } else {
-            //     for (f,z) in y.iter() {
-            //         if z.contains(&x) {continue;}
-            //         outerqueue.push_back(z[0]);
-            //         new_working.push((z,vec![],*f));
-            //     }
-            // }
-
-            // while let Some(SolutionStatusWrap(x,sol)) = innerqueue.pop() {
-            //     if !sol.insert(solns.entry(x).or_default()) {continue;}
-            //     'outloop: for (v,f,mut i) in working.get(&x).into_iter().flatten().copied().collect::<Vec<_>>() {
-            //         while i+1<v.len() {
-            //             if !solns.contains_key(&v[i]) {
-            //                 working.entry(v[i]).or_default().push((v,f,i+1));
-            //                 continue 'outloop;
-            //             }
-            //             i+=1;
-            //         }
-            //     }
-            // }
+            while let Some((l,v,f,x,minsize)) = stack.pop() {
+                if l.len()==0 {
+                    for sol in SolutionStatus::transfix(f,&v,map,builder) {
+                        queue.push(SolutionStatusWrap(x,minsize,Some(sol)));
+                    }
+                    continue;
+                }
+                queue.push(SolutionStatusWrap(l[0],minsize,None));
+                for sol in solns.get(&l[0]).into_iter().flatten().cloned() {
+                    let mut v2=v.clone();
+                    let msz = minsize+sol.size;
+                    v2.push(sol);
+                    stack.push((&l[1..],v2,f,x,msz));
+                }
+                working.entry(l[0]).or_default().push((&l[1..],v,f,x,minsize));
+            }
         }
-
-
         solns.remove(&start).unwrap_or_default().into_iter().map(|x|{
             let SolutionStatus{dsl:a,size:b,mapping:c,..} = &*x;
             (a.clone(),*b,c.as_ref().map(|x|(**x).clone()).unwrap_or_default())
         }).collect()
-
-        //rephrase hm:
-        //    the smallest value to construct <> given that states <>,<>, and <> are irrelevant to you
-        //if you have an answer for X where [a,b] are irrelevant, it'll work even if [a,b,c] are irrelevant to you.
-        //if you set out to construct X where [a,b] are irrelevant, but you don't use a, then you have X where [b] is irrelevant.
-        //if you have a unary answer, nothing is considered irrelevant.
-
-        //if you have an answer for X where [a,b] is irrelevant, and you have that [a] is irrelevant, redo it.
-        
-
-        //[a] is specifically ignored for a memo entry if any children ignored it or if you did
-
-        //anything memo entry ignoring something that isn't in your stack -> dump/destroy
-
-    //     struct ArtificialStack<'a> {
-    //         currentbest: Vec<SolutionStatus>,
-    //         stackrequirement: HashSet<usize>,
-    //         innercollect: Vec<Vec<SolutionStatus>>,
-    //         outertrav:&'a [(usize,Vec<usize>)],
-    //         innertrav:&'a [usize],
-    //         innertoken: usize,
-    //         place:usize,
-
-    //         // hadperfect:bool
-    //     }
-    //     let y = &self.paths[start];
-    //     println!("adding {} to the stack",start);
-    //     let mut stack:Vec<ArtificialStack> = vec![ArtificialStack{
-    //         currentbest:Vec::new(),
-    //         stackrequirement:HashSet::new(),
-    //         innercollect:Vec::new(),
-    //         outertrav:&y[1..],
-    //         innertrav:&y[0].1,
-    //         innertoken:y[0].0,
-    //         // hadperfect:false,
-    //         place:start
-    //     }];
-    //     let mut hm:HashMap<usize,Option<(HashSet<usize>,Vec<SolutionStatus>)>> = HashMap::new();
-    //     hm.insert(start,None);
-    //     while let Some(x) = stack.last_mut() {
-    //         'sloop: loop {
-    //             if x.innertrav.len()>0 {
-    //                 match hm.get(&x.innertrav[0]) {
-    //                     Some(Some((r,s))) => {
-    //                         for required in r {
-    //                             if *required != x.place {
-    //                                 if hm[required].is_some() {
-    //                                     // println!("I aborted because the child was disregarding: {}",required);
-    //                                     hm.remove(&x.innertrav[0]);
-    //                                     break 'sloop;
-    //                                 }
-    //                             }
-    //                         }
-    //                         for required in r {
-    //                             if *required != x.place {
-    //                                 x.stackrequirement.insert(*required);
-    //                             }
-    //                         }
-    //                         if s.len()>0 {
-    //                             x.innercollect.push(s.clone());
-    //                             x.innertrav=&x.innertrav[1..];
-    //                             continue;
-    //                         } else {
-    //                             // panic!();
-    //                             x.innercollect.clear();
-    //                             x.innertrav=&[];
-    //                         }
-    //                     }
-    //                     None=>{
-    //                         let ind = x.innertrav[0];
-    //                         let y = &self.paths[ind];
-    //                         hm.insert(ind,None);
-    //                         println!("adding {} to stack.",ind);
-    //                         stack.push(ArtificialStack{
-    //                             currentbest:Vec::new(),
-    //                             stackrequirement:HashSet::new(),
-    //                             innercollect:Vec::new(),
-    //                             outertrav:&y[1..],
-    //                             innertrav:&y[0].1,
-    //                             innertoken:y[0].0,
-    //                             place:ind,
-    //                             // hadperfect:false
-    //                         });
-    //                         break;
-    //                     }
-    //                     Some(None)=>{
-    //                         if x.innertrav[0] != x.place {
-    //                             x.stackrequirement.insert(x.innertrav[0]);
-    //                         }
-    //                         // println!("RULE DEEMED UNSATISFIABLE BECAUSE OF A LOOP {:?}",hm.get(&x.innertrav[0]).map(|x|x.as_ref().map(|_|5)));
-    //                         x.innercollect.clear();
-    //                         x.innertrav=&[];
-    //                     }
-    //                 }
-    //             } else {
-    //                 let v = take(&mut x.innercollect);
-    //                 if start == x.place {
-    //                     println!("transfixing once {}",x.innertoken);
-    //                 }
-    //                 for newsol in SolutionStatus::transfix(x.innertoken,&v,map,builder) {
-    //                     if start == x.place {
-    //                         println!("found solution of size {}",newsol.size);
-    //                     }
-    //                     newsol.insert(&mut x.currentbest);
-    //                 }
-    //                 if x.innertoken==0 || x.innertoken==1 {
-    //                     // x.hadperfect=true;
-    //                     x.outertrav=&[];//0 and 1 are both unary tokens that don't modify assignments so aborting here is safe but not required
-    //                 }//they also get sorted to the top of the list naturally
-    //             }
-    //             if x.outertrav.len()>1 {
-    //                 x.innertoken=x.outertrav[0].0;
-    //                 x.innertrav=&x.outertrav[0].1;
-    //                 x.outertrav=&x.outertrav[1..];
-    //             } else {
-    //                 let ff = stack.pop().unwrap();
-    //                 println!("popping {} off of the stack with {:#?} solutions.",ff.place,ff.currentbest);
-    //                 // if ff.hadperfect && (ff.currentbest.len()!=1 || ff.currentbest[0].size != 1) {
-    //                 //     panic!("what the hell")
-    //                 // }
-    //                 hm.insert(ff.place,Some((ff.stackrequirement,ff.currentbest)));
-    //                 break;
-    //             }
-    //         }
-
-    //         for j in stack.iter() {
-    //             if hm[&j.place].is_some() {
-    //                 panic!()
-    //             }
-    //         }
-    //     }
-    //     hm.remove(&start).unwrap().unwrap().1.into_iter().map(|SolutionStatus{dsl:a,size:b,mapping:c,..}|
-    //         (a,b,take(Rc::make_mut(&mut c.unwrap_or_default())))
-    //     ).collect()
-
-
-
     }
 }
 
@@ -371,33 +203,22 @@ pub struct SolutionStatus {
     value:Vec<usize>,
     mapping:Option<Rc<HashMap<usize,usize>>>
 }
-pub enum SolutionStatusWrap {
-    UpElem(usize,usize,SolutionStatus),
-    DownElem(usize,usize),
-}
-use SolutionStatusWrap::{*};
-impl SolutionStatusWrap {
-    fn priority(&self)->usize {
-        match self {
-            UpElem(_,a,_)=>*a,
-            DownElem(_,a)=>*a
-        }
-    }
-}
+#[derive(Debug)]
+struct SolutionStatusWrap(usize,usize,Option<SolutionStatus>);
 impl Eq for SolutionStatusWrap {}
 impl Ord for SolutionStatusWrap {
     fn cmp(&self, other: &Self) -> Ordering {
-        other.priority().cmp(&self.priority())
+        other.1.cmp(&self.1)
     }
 }
 impl PartialOrd for SolutionStatusWrap {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(other.priority().cmp(&self.priority()))
+        Some(other.1.cmp(&self.1))
     }
 }
 impl PartialEq<SolutionStatusWrap> for SolutionStatusWrap {
     fn eq(&self, other: &Self) -> bool {
-        self.priority() == other.priority()
+        self.1 == other.1
     }
 }
 impl SolutionStatus {
@@ -417,12 +238,12 @@ impl SolutionStatus {
             _=>Equal
         }
     }
-    fn insert(self,l:&mut Vec<Rc<SolutionStatus>>) -> bool {
+    fn insert(self,l:&mut Vec<Rc<SolutionStatus>>) -> Option<&mut Rc<SolutionStatus>> {
         let mut j = 0;
         loop {
-            if j==l.len() {l.push(Rc::new(self));return true;}
+            if j==l.len() {l.push(Rc::new(self));return l.last_mut();}
             match self.compare_usefulness(&l[j]) {
-                Less=>{return false;}
+                Less=>{return None;}
                 Greater=>{l.remove(j);}
                 Equal=>{j+=1;}
             }
@@ -430,94 +251,81 @@ impl SolutionStatus {
     }
     fn transfix(
         a:usize,
-        v:&Vec<Vec<Rc<SolutionStatus>>>,
+        v:&Vec<Rc<SolutionStatus>>,
         m:&[ValueMapper],
         builder:&mut ExpressionBuilder
     )->Vec<SolutionStatus> {
-        let mut perl = vec![(Vec::new(),1,Vec::new(),None)];
-        for vrow in v {
-            let mut buff = Vec::new();
-            for (sof,size,ex,map) in perl {
-                for SolutionStatus{dsl:jdsl,value:l,size:jsize,mapping:jmap} in vrow.iter().map(|x|&**x) {
-                    if let Some(rmap) = match (jmap.clone(),map.clone()) {
-                        (None,None)=>Some(None),
-                        (Some(x),None)|(None,Some(x))=>Some(Some(x)),
-                        (Some(mut x),Some(mut y))=>disjoint_union(
-                            take(Rc::make_mut(&mut x)),
-                            take(Rc::make_mut(&mut y))
-                        ).map(|x|Some(Rc::new(x)))
-                    } {
-                        let mut nsof = sof.clone();
-                        nsof.push(jdsl);
-                        let mut nex = ex.clone();
-                        nex.push(l);
-                        buff.push((nsof,size+jsize,nex,rmap));
-                    }
-                }
-            }
-            perl = buff;
-        }
+        let size = v.iter().map(|x|x.size).sum::<usize>()+1;
+        let ex = v.iter().map(|x|&x.value).collect::<Vec<_>>();
+        let mapping = match v.iter().fold(Some(None),|a,x|match (a.clone(),x.mapping.clone()) {
+            (None,_)=>None,
+            (Some(None),None)=>Some(None),
+            (Some(Some(x)),None)|(Some(None),Some(x))=>Some(Some(x)),
+            (Some(Some(mut x)),Some(mut y))=>disjoint_union(
+                take(Rc::make_mut(&mut x)),
+                take(Rc::make_mut(&mut y))
+            ).map(|x|Some(Rc::new(x)))
+        }) {Some(x)=>x,None=>{return Vec::new();}};
+        let v = v.iter().map(|x|&x.dsl).collect::<Vec<_>>();
         let mut result = Vec::new();
-        'sol: for (v,size,ex,mapping) in perl {
-            let dsl = match a {
-                0=>BaseValue(1),
-                1=>AccessStack(0),
-                2=>Pair(Box::new(v[0].clone()),Box::new(v[1].clone())),
-                3=>builder.get_left_value(v[0].clone()),
-                4=>builder.get_right_value(v[0].clone()),
-                5=>builder.get_l_prog(v[0].clone()),
-                6=>builder.get_r_prog(v[0].clone()),
-                7=>builder.get_undo_left(v[0].clone()),
-                8=>builder.get_undo_right(v[0].clone()),
-                9=>SwitchValue(Box::new(v[0].clone()),Box::new(v[1].clone()),Box::new(v[2].clone())),
-                10=>ApplyStack(Box::new(AccessStack(1)),v.into_iter().cloned().collect()),
-                w=>ApplyStack(Box::new(BaseValue(builder.get_f_handle(w-11))),v.into_iter().cloned().collect()),
-            };
-            if a==10 {
-                let biz = (0..m.len()).map(|i|{
-                    let u:Vec<_> = m[i].recursion.get(&ex[0][i]).map(|x|x.iter().copied()).into_iter().flatten().collect();
-                    u
-                });
-                let mut cart = vec![(mapping,Vec::new())];//I hate n-ary cartesian products
-                for (bin,brow) in biz.enumerate() {
-                    let mut buf = Vec::new();
-                    if brow.len()==0 {continue 'sol;}
-                    for (cmap,c) in cart {
-                        'defeat: for b in brow.iter() {
-                            let mut cmcl = cmap.clone();
-                            match &mut cmcl {
-                                None=>{
-                                    let mut hm=HashMap::new();
-                                    hm.insert(ex[0][bin],*b);
-                                    cmcl=Some(Rc::new(hm));
-                                },
-                                Some(x)=> match Rc::make_mut(x).entry(ex[0][bin]) {
-                                    Vacant(hole) => {hole.insert(*b);}
-                                    Occupied(spot) => {
-                                        if *spot.get() != *b {continue 'defeat;}
-                                    }
+        let dsl = match a {
+            0=>BaseValue(1),
+            1=>AccessStack(0),
+            2=>Pair(Box::new(v[0].clone()),Box::new(v[1].clone())),
+            3=>builder.get_left_value(v[0].clone()),
+            4=>builder.get_right_value(v[0].clone()),
+            5=>builder.get_l_prog(v[0].clone()),
+            6=>builder.get_r_prog(v[0].clone()),
+            7=>builder.get_undo_left(v[0].clone()),
+            8=>builder.get_undo_right(v[0].clone()),
+            9=>SwitchValue(Box::new(v[0].clone()),Box::new(v[1].clone()),Box::new(v[2].clone())),
+            10=>ApplyStack(Box::new(AccessStack(1)),v.into_iter().cloned().collect()),
+            w=>ApplyStack(Box::new(BaseValue(builder.get_f_handle(w-11))),v.into_iter().cloned().collect()),
+        };
+        if a==10 {
+            let biz = (0..m.len()).map(|i|{
+                let u:Vec<_> = m[i].recursion.get(&ex[0][i]).map(|x|x.iter().copied()).into_iter().flatten().collect();
+                u
+            });
+            let mut cart = vec![(mapping,Vec::new())];//I hate n-ary cartesian products
+            for (bin,brow) in biz.enumerate() {
+                let mut buf = Vec::new();
+                if brow.len()==0 {return Vec::new()}
+                for (cmap,c) in cart {
+                    'defeat: for b in brow.iter() {
+                        let mut cmcl = cmap.clone();
+                        match &mut cmcl {
+                            None=>{
+                                let mut hm=HashMap::new();
+                                hm.insert(ex[0][bin],*b);
+                                cmcl=Some(Rc::new(hm));
+                            },
+                            Some(x)=> match Rc::make_mut(x).entry(ex[0][bin]) {
+                                Vacant(hole) => {hole.insert(*b);}
+                                Occupied(spot) => {
+                                    if *spot.get() != *b {continue 'defeat;}
                                 }
                             }
-                            let mut cl = c.clone();
-                            cl.push(*b);
-                            buf.push((cmcl,cl));
                         }
+                        let mut cl = c.clone();
+                        cl.push(*b);
+                        buf.push((cmcl,cl));
                     }
-                    cart=buf;
                 }
-                for (mapping,value) in cart {
-                    result.push(SolutionStatus {
-                        dsl:dsl.clone(),size,value,mapping
-                    })
-                }
-            } else {
-                let value:Vec<_> = (0..m.len()).filter_map(|i|{
-                    m[i].remap.get(&(a,ex.iter().map(|x|x[i]).collect())).copied()
-                }).collect();
+                cart=buf;
+            }
+            for (mapping,value) in cart {
                 result.push(SolutionStatus {
-                    dsl,size,value,mapping
+                    dsl:dsl.clone(),size,value,mapping
                 })
             }
+        } else {
+            let value:Vec<_> = (0..m.len()).filter_map(|i|{
+                m[i].remap.get(&(a,ex.iter().map(|x|x[i]).collect())).copied()
+            }).collect();
+            result.push(SolutionStatus {
+                dsl,size,value,mapping
+            })
         }
         result
     }
@@ -526,6 +334,7 @@ impl SolutionStatus {
 
 
 pub type NTFA = usize;
+#[derive(Default)]
 pub struct ValueMapper {
     recursion:HashMap<usize,HashSet<usize>>,
     remap:HashMap<(usize,Vec<usize>),usize>
@@ -538,6 +347,7 @@ impl ValueMapper {
         }
     }
 }
+#[derive(Default)]
 pub struct PartialNTFA {
     rules:HashMap<usize,Vec<(usize,Vec<usize>)>>,
     vm:ValueMapper
