@@ -216,218 +216,216 @@ impl ExpressionBuilder {
 }
 
 
-
-pub fn build_ntfa(
-    builder:&mut ExpressionBuilder,
-    input:usize,input_type:usize,
-    output:Option<BaseLiteral>,output_type:usize,
-    confirmer:&Confirmer,
-    previous_accepting_states:&HashMap<usize,HashSet<usize>>,
-    k:usize
-)->(NTFA,HashSet<usize>) {
-    panic!();
-    // let mut res = NTFA::new();
-    // //state space:
-    // // 0:uneval
-    // // 1:()
-    // //function space:
-    // // 0:unit        (0)
-    // // 1:input       (0)
-    // // 2:pair        (2)
-    // // 3:fst         (1)
-    // // 4:snd         (1)
-    // // 5:inl         (1)
-    // // 6:inr         (1)
-    // // 7:unl         (1)
-    // // 8:unr         (1)
-    // // 9:switch      (3)
-    // // 10:recursion  (1)
-    // // 11-onwards: free space!
-    // res.add_nullary(0,1);
-    // res.add_nullary(1,input);
-    // res.add_nullary(0,0);
-    // res.add_nullary(1,0);
-    // res.add_rule(2,0,vec![0,0]);
-    // res.add_rule(3,0,vec![0]);
-    // res.add_rule(4,0,vec![0]);
-    // res.add_rule(5,0,vec![0]);
-    // res.add_rule(6,0,vec![0]);
-    // res.add_rule(7,0,vec![0]);
-    // res.add_rule(8,0,vec![0]);
-    // res.add_rule(9,0,vec![0,0,0]);
-    // res.add_rule(10,0,vec![0]);
-    // for ff in 0..builder.get_f_count() {
-    //     res.add_rule(1+ff,0,vec![0;builder.get_required_function_args(ff).unwrap()]);
-    // }
-    // let mut single_dedup : HashSet<usize> = HashSet::new();
-    // let mut processed : HashSet<usize> = HashSet::new();
-    // let mut processed_rel : HashMap<usize,Vec<(usize,usize)>> = HashMap::new();
-    // let mut queue : BinaryHeap<QueueElem<(usize,Vec<usize>)>> = BinaryHeap::new();
-    // queue.push(QueueElem{item:(1,vec![0]),priority:1});
-    // queue.push(QueueElem{item:(input,vec![input_type]),priority:1});
-    // let mut visited : HashMap<(usize,usize),usize> = HashMap::new();//x with type y is obtained with size z
-    // let mut accepting_states = HashSet::new();
-    // while let Some(QueueElem{item:(x,mut xtl),priority:size}) = queue.pop() {
-    //     if size>=k {break;}
-    //     xtl.retain(|xt|{
-    //         match visited.entry((x,*xt)) {
-    //             Occupied(_)=>false,
-    //             Vacant(y)=>{y.insert(size);true}
-    //         }
-    //     });
-    //     if xtl.len()==0 {continue;}
-    //     let xtl=xtl;//remove mutability
-    //     let mut res_l = Vec::new();
-    //     let mut res_r = Vec::new();
-    //     let mut res_ul = Vec::new();
-    //     let mut res_ur = Vec::new();
-    //     let mut res_fst = Vec::new();
-    //     let mut res_snd = Vec::new();
-    //     for xt in xtl.iter() {
-    //         if let Some(l_up) = builder.l_type_hashes.get(&xt) {
-    //             res_l.extend(l_up.iter().copied());
-    //         }
-    //         if let Some(r_up) = builder.r_type_hashes.get(&xt) {
-    //             res_r.extend(r_up.iter().copied());
-    //         }
-    //         match &builder.types[*xt] {
-    //             PairType(a,b) => {
-    //                 res_fst.push(*a);
-    //                 res_snd.push(*b);
-    //             }
-    //             LRType(a,b) => {
-    //                 res_ul.push(*a);
-    //                 res_ur.push(*b);
-    //             }
-    //             _ => {}
-    //         }
-    //     }
-    //     match &builder.values[x].0 {
-    //         PairValue(y,z)=>{
-    //             res.add_rule(3,x,vec![*y]);
-    //             res.add_rule(4,x,vec![*z]);
-    //             queue.push(QueueElem{item:(*y,res_fst),priority:size+1});
-    //             queue.push(QueueElem{item:(*z,res_snd),priority:size+1});
-    //         }
-    //         _=>{}
-    //     }
-    //     if res_l.len()>0 {
-    //         let nh = builder.get_l(x);
-    //         res.add_rule(5,x,vec![nh]);
-    //         queue.push(QueueElem{item:(nh,res_l),priority:size+1});
-    //     }
-    //     if res_r.len()>0 {
-    //         let nh = builder.get_r(x);
-    //         res.add_rule(6,x,vec![nh]);
-    //         queue.push(QueueElem{item:(nh,res_r),priority:size+1});
-    //     }
-    //     match &builder.values[x].0 {
-    //         LValue(y)=>{
-    //             res.add_rule(7,x,vec![*y]);
-    //             queue.push(QueueElem{item:(*y,res_ul),priority:size+1});
-    //         }
-    //         RValue(y)=>{
-    //             res.add_rule(8,x,vec![*y]);
-    //             queue.push(QueueElem{item:(*y,res_ur),priority:size+1});
-    //         }
-    //         _=>{}
-    //     }
-    //     for xt in xtl.iter() {
-    //         let oua = if let Some(y) = &output {y.accepts(x)} else {true};
-    //         if *xt == output_type && oua && confirmer.accepts(builder,input,x) {
-    //             accepting_states.insert(x);
-    //         }
-    //         if *xt == input_type && builder.values[input].1>builder.values[x].1 {
-    //             if let Some(z) = previous_accepting_states.get(&x) {
-    //                 for bub in z {
-    //                     res.add_rule(10,x,vec![*bub]);
-    //                     queue.push(QueueElem{item:(*bub,vec![output_type]),priority:size+1});
-    //                 }
-    //             } else {
-    //                 println!("-=-=-=-=-=-=-=-=-=-=-=-=- ntfa tried to get accepting states of state that hasn't been calculated yet!");
-    //             }
-    //         }
-    //         if let Some(z) = builder.stupid_typemap.get(&xt) {
-    //             let z=z.clone();
-    //             for (f_ind,s_ind) in z.iter() {
-    //                 let FunctionEntry {argtypes,restype,..} = &builder.functions[*f_ind];
-    //                 let restype=*restype;
-    //                 let mut cartesian = vec![(Vec::new(),0)];
-    //                 for (i,argtype) in argtypes.into_iter().enumerate() {
-    //                     if i==*s_ind {
-    //                         for (c,ss) in cartesian.iter_mut() {c.push(x);*ss+=size}
-    //                         continue;
-    //                     }
-    //                     let mut swap_buf = Vec::new();
-    //                     if let Some(v) = processed_rel.get(&argtype) {
-    //                         for (u,usi) in v.iter() {
-    //                             for (cart,csize) in cartesian.iter() {
-    //                                 swap_buf.push({let mut cc=cart.clone();cc.push(*u);(cc,csize+usi)});
-    //                             }
-    //                         }
-    //                     }
-    //                     if swap_buf.len()==0 {break;}
-    //                     cartesian=swap_buf;
-    //                 }
-    //                 for (mut cart,csize) in cartesian.into_iter() {
-    //                     let exec = builder.exec_function(*f_ind,cart.clone());
-    //                     let rf = cart.remove(0);
-    //                     cart.push(exec);
-    //                     res.add_rule(11+*f_ind,rf,cart);
-    //                     queue.push(QueueElem{item:(exec,vec![restype]),priority:csize+1});
-    //                 }
-    //             }
-    //         }
-    //         if let Some(z) = builder.left_type_hashes.get(&xt) {
-    //             let z=z.clone();
-    //             for w in z.iter() {
-    //                 let r = match &builder.types[*w] {PairType(_,r)=>r,_=>panic!()};
-    //                 if let Some(v) = processed_rel.get(&r) {
-    //                     for (u,usi) in v.iter() {
-    //                         let merged = builder.get_pair(x,*u);
-    //                         res.add_rule(2,x,vec![*u,merged]);
-    //                         queue.push(QueueElem{item:(merged,vec![*w]),priority:usi+size+1});
-    //                     }
-    //                 }
-    //             }
-    //         }
-    //         if let Some(z) = builder.right_type_hashes.get(&xt) {
-    //             let z=z.clone();
-    //             for w in z.iter() {
-    //                 let l = match &builder.types[*w] {PairType(l,_)=>l,_=>panic!()};
-    //                 if let Some(v) = processed_rel.get(&l) {
-    //                     for (u,usi) in v.iter() {
-    //                         let merged = builder.get_pair(*u,x);
-    //                         res.add_rule(2,*u,vec![x,merged]);
-    //                         queue.push(QueueElem{item:(merged,vec![*w]),priority:usi+size+1});
-    //                     }
-    //                 }
-    //             }
-    //         }
-    //     }
-    //     if !single_dedup.contains(&x) {
-    //         single_dedup.insert(x);
-    //         processed.insert(x);
-    //         for y in processed.iter() {
-    //             match &builder.values[*y].0 {
-    //                 LValue(_)=>{res.add_rule(9,*y,vec![x,0,x]);}
-    //                 RValue(_)=>{res.add_rule(9,*y,vec![0,x,x]);}
-    //                 _=>{}
-    //             }
-    //             match &builder.values[x].0 {
-    //                 LValue(_)=>{res.add_rule(9,x,vec![*y,0,*y]);}
-    //                 RValue(_)=>{res.add_rule(9,x,vec![0,*y,*y]);}
-    //                 _=>{}
-    //             }
-    //         }
-    //     }
-    //     for xt in xtl.iter() {
-    //         processed_rel.entry(*xt).or_default().push((x,size));
-    //     }//processed_rel is meant to have duplicate entries: one for each type.
-    // }
-    // (res,accepting_states)
+impl NTFABuilder {
+    pub fn build_ntfa(
+        &mut self,
+        builder:&mut ExpressionBuilder,
+        input:usize,input_type:usize,
+        output:Option<BaseLiteral>,output_type:usize,
+        confirmer:&Confirmer,
+        previous_accepting_states:&HashMap<usize,HashSet<usize>>,
+        k:usize
+    )->(Option<(usize,ValueMapper)>,HashSet<usize>) {
+        let mut res = PartialNTFA::new();
+        //state space:
+        // 0:uneval
+        // 1:()
+        //function space:
+        // 0:unit        (0)
+        // 1:input       (0)
+        // 2:pair        (2)
+        // 3:fst         (1)
+        // 4:snd         (1)
+        // 5:inl         (1)
+        // 6:inr         (1)
+        // 7:unl         (1)
+        // 8:unr         (1)
+        // 9:switch      (3)
+        // 10:recursion  (1)
+        // 11-onwards: free space!
+        res.add_rule(0,Vec::new(),1);
+        res.add_rule(1,Vec::new(),input);
+        res.add_rule(0,Vec::new(),0);
+        res.add_rule(1,Vec::new(),0);
+        res.add_rule(2,vec![0,0],0);
+        res.add_rule(3,vec![0],0);
+        res.add_rule(4,vec![0],0);
+        res.add_rule(5,vec![0],0);
+        res.add_rule(6,vec![0],0);
+        res.add_rule(7,vec![0],0);
+        res.add_rule(8,vec![0],0);
+        res.add_rule(9,vec![0,0,0],0);
+        res.add_rule(10,vec![0],0);
+        for ff in 0..builder.get_f_count() {
+            res.add_rule(1+ff,vec![0;builder.get_required_function_args(ff).unwrap()],0);
+        }
+        let mut single_dedup : HashSet<usize> = HashSet::new();
+        let mut processed : HashSet<usize> = HashSet::new();
+        let mut processed_rel : HashMap<usize,Vec<(usize,usize)>> = HashMap::new();
+        let mut queue : BinaryHeap<QueueElem<(usize,Vec<usize>)>> = BinaryHeap::new();
+        queue.push(QueueElem{item:(1,vec![0]),priority:1});
+        queue.push(QueueElem{item:(input,vec![input_type]),priority:1});
+        let mut visited : HashMap<(usize,usize),usize> = HashMap::new();//x with type y is obtained with size z
+        let mut accepting_states = HashSet::new();
+        while let Some(QueueElem{item:(x,mut xtl),priority:size}) = queue.pop() {
+            if size>=k {break;}
+            xtl.retain(|xt|{
+                match visited.entry((x,*xt)) {
+                    Occupied(_)=>false,
+                    Vacant(y)=>{y.insert(size);true}
+                }
+            });
+            if xtl.len()==0 {continue;}
+            let xtl=xtl;//remove mutability
+            let mut res_l = Vec::new();
+            let mut res_r = Vec::new();
+            let mut res_ul = Vec::new();
+            let mut res_ur = Vec::new();
+            let mut res_fst = Vec::new();
+            let mut res_snd = Vec::new();
+            for xt in xtl.iter() {
+                if let Some(l_up) = builder.l_type_hashes.get(&xt) {
+                    res_l.extend(l_up.iter().copied());
+                }
+                if let Some(r_up) = builder.r_type_hashes.get(&xt) {
+                    res_r.extend(r_up.iter().copied());
+                }
+                match &builder.types[*xt] {
+                    PairType(a,b) => {
+                        res_fst.push(*a);
+                        res_snd.push(*b);
+                    }
+                    LRType(a,b) => {
+                        res_ul.push(*a);
+                        res_ur.push(*b);
+                    }
+                    _ => {}
+                }
+            }
+            match &builder.values[x].0 {
+                PairValue(y,z)=>{
+                    res.add_rule(3,vec![x],*y);
+                    res.add_rule(4,vec![x],*z);
+                    queue.push(QueueElem{item:(*y,res_fst),priority:size+1});
+                    queue.push(QueueElem{item:(*z,res_snd),priority:size+1});
+                }
+                _=>{}
+            }
+            if res_l.len()>0 {
+                let nh = builder.get_l(x);
+                res.add_rule(5,vec![x],nh);
+                queue.push(QueueElem{item:(nh,res_l),priority:size+1});
+            }
+            if res_r.len()>0 {
+                let nh = builder.get_r(x);
+                res.add_rule(6,vec![x],nh);
+                queue.push(QueueElem{item:(nh,res_r),priority:size+1});
+            }
+            match &builder.values[x].0 {
+                LValue(y)=>{
+                    res.add_rule(7,vec![x],*y);
+                    queue.push(QueueElem{item:(*y,res_ul),priority:size+1});
+                }
+                RValue(y)=>{
+                    res.add_rule(8,vec![x],*y);
+                    queue.push(QueueElem{item:(*y,res_ur),priority:size+1});
+                }
+                _=>{}
+            }
+            for xt in xtl.iter() {
+                let oua = if let Some(y) = &output {y.accepts(x)} else {true};
+                if *xt == output_type && oua && confirmer.accepts(builder,input,x) {
+                    accepting_states.insert(x);
+                }
+                if *xt == input_type && builder.values[input].1>builder.values[x].1 {
+                    if let Some(z) = previous_accepting_states.get(&x) {
+                        for bub in z {
+                            res.add_rule(10,vec![x],*bub);
+                            queue.push(QueueElem{item:(*bub,vec![output_type]),priority:size+1});
+                        }
+                    } else {
+                        println!("-=-=-=-=-=-=-=-=-=-=-=-=- ntfa tried to get accepting states of state that hasn't been calculated yet!");
+                    }
+                }
+                if let Some(z) = builder.stupid_typemap.get(&xt) {
+                    let z=z.clone();
+                    for (f_ind,s_ind) in z.iter() {
+                        let FunctionEntry {argtypes,restype,..} = &builder.functions[*f_ind];
+                        let restype=*restype;
+                        let mut cartesian = vec![(Vec::new(),0)];
+                        for (i,argtype) in argtypes.into_iter().enumerate() {
+                            if i==*s_ind {
+                                for (c,ss) in cartesian.iter_mut() {c.push(x);*ss+=size}
+                                continue;
+                            }
+                            let mut swap_buf = Vec::new();
+                            if let Some(v) = processed_rel.get(&argtype) {
+                                for (u,usi) in v.iter() {
+                                    for (cart,csize) in cartesian.iter() {
+                                        swap_buf.push({let mut cc=cart.clone();cc.push(*u);(cc,csize+usi)});
+                                    }
+                                }
+                            }
+                            if swap_buf.len()==0 {break;}
+                            cartesian=swap_buf;
+                        }
+                        for (cart,csize) in cartesian.into_iter() {
+                            let exec = builder.exec_function(*f_ind,cart.clone());
+                            res.add_rule(11+*f_ind,cart,exec);
+                            queue.push(QueueElem{item:(exec,vec![restype]),priority:csize+1});
+                        }
+                    }
+                }
+                if let Some(z) = builder.left_type_hashes.get(&xt) {
+                    let z=z.clone();
+                    for w in z.iter() {
+                        let r = match &builder.types[*w] {PairType(_,r)=>r,_=>panic!()};
+                        if let Some(v) = processed_rel.get(&r) {
+                            for (u,usi) in v.iter() {
+                                let merged = builder.get_pair(x,*u);
+                                res.add_rule(2,vec![x,*u],merged);
+                                queue.push(QueueElem{item:(merged,vec![*w]),priority:usi+size+1});
+                            }
+                        }
+                    }
+                }
+                if let Some(z) = builder.right_type_hashes.get(&xt) {
+                    let z=z.clone();
+                    for w in z.iter() {
+                        let l = match &builder.types[*w] {PairType(l,_)=>l,_=>panic!()};
+                        if let Some(v) = processed_rel.get(&l) {
+                            for (u,usi) in v.iter() {
+                                let merged = builder.get_pair(*u,x);
+                                res.add_rule(2,vec![*u,x],merged);
+                                queue.push(QueueElem{item:(merged,vec![*w]),priority:usi+size+1});
+                            }
+                        }
+                    }
+                }
+            }
+            if !single_dedup.contains(&x) {
+                single_dedup.insert(x);
+                processed.insert(x);
+                for y in processed.iter() {
+                    match &builder.values[*y].0 {
+                        LValue(_)=>{res.add_rule(9,vec![*y,x,0],x);}
+                        RValue(_)=>{res.add_rule(9,vec![*y,0,x],x);}
+                        _=>{}
+                    }
+                    match &builder.values[x].0 {
+                        LValue(_)=>{res.add_rule(9,vec![x,*y,0],*y);}
+                        RValue(_)=>{res.add_rule(9,vec![x,0,*y],*y);}
+                        _=>{}
+                    }
+                }
+            }
+            for xt in xtl.iter() {
+                processed_rel.entry(*xt).or_default().push((x,size));
+            }//processed_rel is meant to have duplicate entries: one for each type.
+        }
+        (res.convert(self,&accepting_states),accepting_states)
+    }
 }
-
 
 
 
