@@ -33,7 +33,7 @@ fn main() {
                 else {Some(p)}
             }).collect();
     paths.sort();
-    // for fullpath in paths.into_iter().take(8) {
+    // for fullpath in paths.into_iter().take(7) {
     //     let (builder,spec,(input_type,output_type)) = interpret_file(fullpath);
     //     synthesize(builder,spec,input_type,output_type);
     // }

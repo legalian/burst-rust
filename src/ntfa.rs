@@ -118,6 +118,7 @@ impl NTFABuilder {
                     }
                     ao+=1;
                 }
+                if ao>1||bo>1 {println!("did a big one: {}x{} of {}",ao,bo,f);}
                 a+=ao;
                 b+=bo;
             }
@@ -294,16 +295,18 @@ impl SolutionStatus {
                 for (cmap,c) in cart {
                     'defeat: for b in brow.iter() {
                         let mut cmcl = cmap.clone();
-                        match &mut cmcl {
-                            None=>{
-                                let mut hm=HashMap::new();
-                                hm.insert(ex[0][bin],*b);
-                                cmcl=Some(Rc::new(hm));
-                            },
-                            Some(x)=> match Rc::make_mut(x).entry(ex[0][bin]) {
-                                Vacant(hole) => {hole.insert(*b);}
-                                Occupied(spot) => {
-                                    if *spot.get() != *b {continue 'defeat;}
+                        if ex[0][bin]!=0 && *b!=0 {
+                            match &mut cmcl {
+                                None=>{
+                                    let mut hm=HashMap::new();
+                                    hm.insert(ex[0][bin],*b);
+                                    cmcl=Some(Rc::new(hm));
+                                },
+                                Some(x)=> match Rc::make_mut(x).entry(ex[0][bin]) {
+                                    Vacant(hole) => {hole.insert(*b);}
+                                    Occupied(spot) => {
+                                        if *spot.get() != *b {continue 'defeat;}
+                                    }
                                 }
                             }
                         }
