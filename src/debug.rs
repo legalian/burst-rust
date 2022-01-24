@@ -236,7 +236,12 @@ impl<'a> Debug for DebugTypedValue<'a> {
             }
             (UnitValue,UnitType)=>f.write_str("Unit"),
             (Uneval,_)=>f.write_str("Uneval"),
-            _=>panic!()
+            _=>{
+                let mut builder = f.debug_tuple("Value_Type_Mismatch");
+                builder.field(&DebugValue{t:self.val,expr:self.expr});
+                builder.field(&DebugType{t:self.ty,depth:5,expr:self.expr});
+                builder.finish()
+            }
         }
     }
 }

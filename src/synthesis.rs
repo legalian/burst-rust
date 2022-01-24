@@ -6,9 +6,48 @@ use std::collections::BinaryHeap;
 use std::collections::HashMap;
 use std::collections::HashSet;
 // use std::rc::Rc;
-// use ProcValue::{*};
+use ProcValue::{*};
+// use ProcType::{*};
 // use RefineLiteral::{*};
 use crate::debug::{*};
+
+fn extract_subexpressions(
+    builder:&ExpressionBuilder,
+    states:&HashMap<usize,BaseLiteral>
+)->HashMap<usize,HashSet<usize>> {
+    let mut subexpressions:HashMap<usize,HashSet<usize>> = HashMap::new();
+    let mut stack : Vec<usize> = Vec::new();
+    for key in states.keys() {
+        if subexpressions.contains_key(key) {continue;}
+        stack.push(*key);
+        while let Some(x) = stack.last() {
+            if subexpressions.contains_key(key) {continue;}
+            match &builder.values[*x].0 {
+                PairValue(a,b)=>{
+                    if let Some(ax) = subexpressions.get(&a) {
+                        if let Some(bx) = subexpressions.get(&b) {
+                            let mut hm:HashSet<usize> = ax.union(bx).copied().collect();
+                            hm.insert(*a);hm.insert(*b);
+                            let x = stack.pop().unwrap();
+                            subexpressions.insert(x,hm);
+                        } else {stack.push(*b)}
+                    } else {stack.push(*a)}
+                }
+                LValue(a)|RValue(a)=>{
+                    if let Some(ax) = subexpressions.get(&a) {
+                        let mut hm = ax.clone();hm.insert(*a);
+                        let x = stack.pop().unwrap();
+                        subexpressions.insert(x,hm);
+                    } else {stack.push(*a)}
+                }
+                _=>{
+                    subexpressions.insert(*x,HashSet::new());
+                    stack.pop();
+                }
+            }
+        }
+    } subexpressions
+}
 
 
 pub fn synthesize(
@@ -28,6 +67,7 @@ pub fn synthesize(
             let mut accepting_states : HashMap<usize,HashSet<usize>> = HashMap::new();
             let mut opntfa : Option<usize> = None;
             let mut tables : Vec<ValueMapper> = Vec::new();
+            let mut subexpressions = extract_subexpressions(&mut exprbuilder,&states);
             let mut order = states.keys().copied().collect::<Vec<_>>();
             order.sort_unstable_by_key(|x|exprbuilder.values[*x].1);
             for a in order {
@@ -39,6 +79,7 @@ pub fn synthesize(
                     &confirmer,
                     &mut accepting_states,
                     &mut graph_buffer,
+                    &mut subexpressions,
                     14
                 );
                 println!("built!");
@@ -55,6 +96,7 @@ pub fn synthesize(
                     Some(oldstate)=>{
                         println!("intersecting...");
                         if let Some(intstate) = ntfabuilder.intersect(newntfa,oldstate) {
+                            ntfabuilder.deplete_minification_queue();
                             Some(intstate)
                         } else {
                             //mark into omega

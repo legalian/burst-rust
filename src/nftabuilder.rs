@@ -226,6 +226,49 @@ impl ExpressionBuilder {
     }
 }
 
+enum RComp {
+    Same,
+    Smaller,
+    Unrelated
+}
+use RComp::{*};
+impl RComp {
+    fn ok(&self)->bool {
+        match self {
+            Smaller=>true,
+            _=>false
+        }
+    }
+}
+
+fn compare_strictlysmaller(
+    builder:&ExpressionBuilder,
+    subexpressions : &mut HashMap<usize,HashSet<usize>>,
+    a:usize,
+    b:usize
+)->RComp {
+    if a==b {return Same;}
+    if builder.values[a].1>=builder.values[b].1 { return Unrelated }
+    // else {return Smaller;} //uncomment this line to allow recursion into ANY smaller value
+    if let Some(x) = subexpressions.get(&b) {
+        if x.contains(&a) {return Smaller;}
+    }
+    match (&builder.values[a].0,&builder.values[b].0) {
+        (PairValue(ax,ay),PairValue(bx,by))=>match compare_strictlysmaller(builder,subexpressions,*ax,*bx) {
+            st@(Same|Smaller)=>match (st,compare_strictlysmaller(builder,subexpressions,*ay,*by)) {
+                (Same,Same)=>Same,
+                (Smaller|Same,Smaller|Same)=>{
+                    subexpressions.entry(b).or_default().insert(a);
+                    Smaller
+                }
+                _=>Unrelated
+            }
+            _=>Unrelated
+        }//uncomment the following line to allow any expression where a subexpression was replaced by a strict subexpression.
+        // (LValue(a),LValue(b))|(RValue(a),RValue(b))=>compare_strictlysmaller(builder,subexpressions,*a,*b),
+        _=>Unrelated
+    }
+}
 
 impl NTFABuilder {
     pub fn build_ntfa(
@@ -236,6 +279,7 @@ impl NTFABuilder {
         confirmer:&Confirmer,
         previous_accepting_states:&mut HashMap<usize,HashSet<usize>>,
         graph_buffer : &mut HashMap<usize,Option<(usize,ValueMapper)>>,
+        subexpressions : &mut HashMap<usize,HashSet<usize>>,
         k:usize
     )->Option<(usize,ValueMapper)> {
         println!("-=-=-=-=-=-=-=-=-=- BEGINNING BUILD PHASE: {:?}",DebugTypedValue{val:input,ty:input_type,expr:builder});
@@ -245,7 +289,7 @@ impl NTFABuilder {
             output : Option<BaseLiteral>,
             res : PartialNTFA,
             processed : HashMap<usize,usize>,
-            processed_rel : HashMap<usize,Vec<(usize,usize)>>,
+            processed_rel : HashMap<usize,Vec<(usize,usize)>>,//type:val,size,rstatus
             queue : BinaryHeap<QueueElem<(usize,Vec<usize>)>>,
             visited : HashMap<(usize,usize),usize>,
             accepting_states : HashSet<usize>
@@ -318,13 +362,21 @@ impl NTFABuilder {
         }) = stack.last_mut() {
             let input=*input;
             // let output=
-            while let Some(QueueElem{item:(x,xtl),priority:size}) = queue.peek() {
-                let x=*x;
-                if *size>=k {break;}
+            while let Some(QueueElem{item:(x,mut xtl),priority:size}) = queue.pop() {
+                if size>=k {break;}
+                xtl.retain(|xt|{
+                    match visited.entry((x,*xt)) {
+                        Occupied(_)=>false,
+                        Vacant(y)=>{y.insert(size);true}
+                    }
+                });
+                if xtl.len()==0 {continue;}
+                let xtl=xtl;
                 for xt in xtl.iter() {
-                    if *xt == input_type && builder.values[input].1>builder.values[x].1 {
+                    if *xt == input_type && compare_strictlysmaller(builder,subexpressions,x,input).ok() {
+                        println!("back to the drawing board. From {:?} to {:?}",DebugTypedValue{val:input,ty:input_type,expr:builder},DebugTypedValue{val:x,ty:input_type,expr:builder});
                         if !previous_accepting_states.contains_key(&x) {
-                            println!("back to the drawing board. From {:?} to {:?}",DebugTypedValue{val:input,ty:input_type,expr:builder},DebugTypedValue{val:x,ty:input_type,expr:builder});
+                            queue.push(QueueElem{item:(x,xtl),priority:size});
                             stack.push(new_stack_elem(
                                 x,
                                 input_type,
@@ -335,15 +387,6 @@ impl NTFABuilder {
                         }
                     }
                 }
-                let QueueElem{item:(x,mut xtl),priority:size} = queue.pop().unwrap();
-                xtl.retain(|xt|{
-                    match visited.entry((x,*xt)) {
-                        Occupied(_)=>false,
-                        Vacant(y)=>{y.insert(size);true}
-                    }
-                });
-                if xtl.len()==0 {continue;}
-                let xtl=xtl;
                 let mut res_l = Vec::new();
                 let mut res_r = Vec::new();
                 let mut res_ul = Vec::new();
@@ -376,6 +419,14 @@ impl NTFABuilder {
                         queue.push(QueueElem{item:(*y,res_fst),priority:size+1});
                         queue.push(QueueElem{item:(*z,res_snd),priority:size+1});
                     }
+                    LValue(y)=>{
+                        res.add_rule(7,vec![x],*y);
+                        queue.push(QueueElem{item:(*y,res_ul),priority:size+1});
+                    }
+                    RValue(y)=>{
+                        res.add_rule(8,vec![x],*y);
+                        queue.push(QueueElem{item:(*y,res_ur),priority:size+1});
+                    }
                     _=>{}
                 }
                 if res_l.len()>0 {
@@ -388,23 +439,12 @@ impl NTFABuilder {
                     res.add_rule(6,vec![x],nh);
                     queue.push(QueueElem{item:(nh,res_r),priority:size+1});
                 }
-                match &builder.values[x].0 {
-                    LValue(y)=>{
-                        res.add_rule(7,vec![x],*y);
-                        queue.push(QueueElem{item:(*y,res_ul),priority:size+1});
-                    }
-                    RValue(y)=>{
-                        res.add_rule(8,vec![x],*y);
-                        queue.push(QueueElem{item:(*y,res_ur),priority:size+1});
-                    }
-                    _=>{}
-                }
                 for xt in xtl.iter() {
                     let oua = if let Some(y) = &output {y.accepts(x)} else {true};
                     if *xt == output_type && oua && confirmer.accepts(builder,input,x) {
                         accepting_states.insert(x);
                     }
-                    if *xt == input_type && builder.values[input].1>builder.values[x].1 {
+                    if *xt == input_type && compare_strictlysmaller(builder,subexpressions,x,input).ok() {
                         for bub in &previous_accepting_states[&x] {
                             res.add_rule(10,vec![x],*bub);
                             queue.push(QueueElem{item:(*bub,vec![output_type]),priority:size+1});
@@ -438,6 +478,14 @@ impl NTFABuilder {
                                 res.add_rule(11+*f_ind,cart,exec);
                                 queue.push(QueueElem{item:(exec,vec![restype]),priority:csize+1});
                             }
+                        }
+                    }
+                    if size*2<k {
+                        if let Some(w) = builder.pair_type_hashes.get(&(*xt,*xt)) {
+                            let w=*w;
+                            let merged = builder.get_pair(x,x);
+                            res.add_rule(2,vec![x,x],merged);
+                            queue.push(QueueElem{item:(merged,vec![w]),priority:size*2+1});
                         }
                     }
                     if let Some(z) = builder.left_type_hashes.get(&xt) {
@@ -496,6 +544,7 @@ impl NTFABuilder {
                 ..
             } = stack.pop().unwrap();
             // println!("{:?} resulted in: {:#?}",DebugValue{t:input,expr:builder},res);
+            // println!("constructed one.");
             graph_buffer.insert(input,res.convert(self,&accepting_states));
             previous_accepting_states.insert(input,accepting_states);
         }

@@ -33,26 +33,129 @@ fn disjoint_union_3(a:HashMap<usize,usize>,b:HashMap<usize,usize>,c:HashMap<usiz
 pub struct NTFABuilder {
     paths:Vec<Vec<(usize,Vec<usize>)>>,//inner vec must be sorted
     revhash:HashMap<Vec<(usize,Vec<usize>)>,usize>,
-    intersect_memo:HashMap<(usize,usize),usize>
+    intersect_memo:HashMap<(usize,usize),usize>,
+
+    // closed_expr:HashSet<usize>,
+
+    uneval_hack:Option<usize>,
+
+    minification_queue:Vec<usize>,
+
+
+    created_by_union:HashSet<usize>
+
+
+    // purge_memo:HashSet<usize>
 }
 impl NTFABuilder {
     pub fn new()->Self {
         NTFABuilder {
             paths:Vec::new(),//inner vec must be sorted
             revhash:HashMap::new(),
-            intersect_memo:HashMap::new()
+            intersect_memo:HashMap::new(),
+            // closed_expr:HashSet::new(),
+            uneval_hack:None,
+            // purge_memo:HashSet::new()
+            minification_queue:Vec::new(),
+            created_by_union:HashSet::new()
         }
     }
-    fn get_ntfa(&mut self,mut deps:Vec<(usize,Vec<usize>)>)->usize {
+    // pub fn purge(&mut self,start:usize) {
+    //     if self.purge_memo.contains(&start) {
+    //         return;
+    //     }
+    //     self.purge_memo.insert(start);
+    //     let deps = &self.paths[start];
+    //     if deps.len()==0 {panic!("empty shit: {}",start)}
+    //     let mut asdfj = Vec::new();
+    //     for j in deps.iter() {
+    //         for k in j.1.iter() {
+    //             asdfj.push(*k);
+    //         }
+    //     }
+    //     for k in asdfj {self.purge(k);}
+    // }
+    fn indepth_simplify(&mut self,start:usize) {
+        // if !self.closed_expr.insert(start) {return;}
+        let mut deps = self.paths[start].clone();
+        let mut a=0;
+        while a<deps.len()-1 {
+            let f = deps[a].0;
+            let mut b=1;
+            while deps[a+b].0==f {
+                for c in 0..b {
+                    let al = &deps[a+c].1;
+                    let bl = &deps[a+b].1;
+                    let mut i=0;
+                    while i<al.len() && al[i] == bl[i] {i+=1;}
+                    if i>=al.len() {
+                        panic!("it wasn't deduped!");
+                        // deps.remove(a+b);
+                        // b-=1;break;
+                    }
+                    let l=i;
+                    i+=1;
+                    while i<al.len() && al[i] == bl[i] {i+=1;}
+                    if i>=al.len() {
+                        let tmp = self.union(al[l],bl[l]);
+                        deps[a+c].1[l]=tmp;
+                        deps.remove(a+b);
+                        b=0;break;
+                    }
+                }
+                b+=1;
+                if a+b>=deps.len() {break;}
+            }
+            a+=b;
+        }
+        self.revhash.insert(deps.clone(),start);
+        self.paths[start] = deps;
+    }
+    fn small_simplification(deps: &mut Vec<(usize,Vec<usize>)>) {
         deps.sort_unstable();
         deps.dedup();
+    }
+    // fn all_children_closed(&self,deps: &[(usize,Vec<usize>)])->bool {
+    //     deps.iter().all(|(_,x)|x.iter().all(|y|self.closed_expr.contains(y)))
+    // }
+    fn check_requires_further(deps: &[(usize,Vec<usize>)])->bool {
+        let mut requires_further = true;
+        let mut a=0;
+        'outer: while a<deps.len()-1 {
+            let f = deps[a].0;
+            let mut b=1;
+            while deps[a+b].0==f {
+                for c in 0..b {
+                    let al = &deps[a+c].1;
+                    let bl = &deps[a+b].1;
+                    let mut i=0;
+                    while i<al.len() && al[i] == bl[i] {i+=1;}
+                    if i>=al.len() {panic!("wasn't deduped...")}
+                    i+=1;
+                    while i<al.len() && al[i] == bl[i] {i+=1;}
+                    if i>=al.len() {
+                        // println!("rewuires: {}   {:?} {:?}",f,al,bl);
+                        requires_further=true;
+                        break 'outer;
+                    }
+                }
+                b+=1;
+                if a+b>=deps.len() {break;}
+            }
+            a+=b;
+        } requires_further
+    }
+    fn get_ntfa(&mut self,mut deps:Vec<(usize,Vec<usize>)>)->usize {
+        NTFABuilder::small_simplification(&mut deps);
         match self.revhash.entry(deps) {
-            Occupied(x)=>{*x.get()}
+            Occupied(x)=>*x.get(),
             Vacant(x)=>{
-                let nval=self.paths.len();
+                let i=self.paths.len();
+                if NTFABuilder::check_requires_further(x.key()) {
+                    self.minification_queue.push(i);
+                }
                 self.paths.push(x.key().clone());
-                x.insert(nval);
-                nval
+                x.insert(i); i
             }
         }
     }
@@ -60,11 +163,23 @@ impl NTFABuilder {
         self.paths.push(vec![]);
         self.paths.len()-1
     }
-    fn insert_into_placeholder(&mut self,mut deps:Vec<(usize,Vec<usize>)>,i:usize) {
-        deps.sort_unstable();
-        deps.dedup();
-        self.revhash.insert(deps.clone(),i);
-        self.paths[i]=deps;
+    fn insert_into_placeholder(&mut self,mut deps:Vec<(usize,Vec<usize>)>,i:usize)->usize {
+        NTFABuilder::small_simplification(&mut deps);
+        match self.revhash.entry(deps) {
+            Occupied(x)=>*x.get(),//release i back to the cluster...
+            Vacant(x)=>{
+                if NTFABuilder::check_requires_further(x.key()) {
+                    self.minification_queue.push(i);
+                }
+                self.paths[i]=x.key().clone();
+                x.insert(i); i
+            }
+        }
+    }
+    pub fn deplete_minification_queue(&mut self) {
+        while let Some(i) = self.minification_queue.pop() {
+            self.indepth_simplify(i);
+        }
     }
 
     pub fn intersect(&mut self,a_start:usize,b_start:usize) -> Option<usize> {
@@ -118,7 +233,7 @@ impl NTFABuilder {
                     }
                     ao+=1;
                 }
-                if ao>1||bo>1 {println!("did a big one: {}x{} of {}",ao,bo,f);}
+                // if ao>1||bo>1 {println!("did a big one: {}x{} of {}",ao,bo,f);}
                 a+=ao;
                 b+=bo;
             }
@@ -127,7 +242,25 @@ impl NTFABuilder {
         self.insert_into_placeholder(output,place);
         Some(place)
     }
-    pub fn union(&mut self,mut a:Vec<usize>) -> Option<usize> {
+    pub fn union(&mut self,a:usize,b:usize) -> usize {
+        let st = self.paths.len();
+        let whwh : Vec<_> = self.paths[a].iter().cloned().chain(self.paths[b].iter().cloned()).collect();
+        if whwh.len()==0 {panic!()}
+        let vbvb = self.get_ntfa(whwh);
+        if self.paths.len()!=st {
+            if vbvb!=st {
+                panic!("fuck");
+            }
+            self.created_by_union.insert(vbvb);
+            if self.created_by_union.contains(&a) || self.created_by_union.contains(&b) {
+                println!("repeated union: {} u {} = {};",a,b,vbvb);
+            } else {
+                println!("new union: {} u {} = {};",a,b,vbvb);
+            }
+        }
+        vbvb
+    }
+    pub fn nary_union(&mut self,mut a:Vec<usize>) -> Option<usize> {
         if a.len()==0 {return None}
         if a.len()==1 {return Some(a.remove(0))}
         let mut total:Vec<(usize,Vec<usize>)> = Vec::new();
@@ -389,19 +522,29 @@ impl PartialNTFA {
                     innertoken:y[0].0,
                     place
                 });
-                accepting.push(place);
             } else {continue;}
             while let Some(x) = stack.last_mut() {
                 loop {
                     if x.innertrav.len()>0 {
-                        if let Some(y) = memo.get(&x.innertrav[0]) {
-                            x.innercollect.push(*y);
+                        if let Some(y) = {
+                            if x.innertrav[0]==0 {
+                                builder.uneval_hack
+                            } else {
+                                memo.get(&x.innertrav[0]).copied()
+                            }
+                        } {
+                            x.innercollect.push(y);
                             x.innertrav=&x.innertrav[1..];
                             continue;
                         } else {
                             if let Some(y) = self.rules.get(&x.innertrav[0]) {
                                 let place = builder.get_placeholder();
-                                memo.insert(x.innertrav[0],place);
+                                if x.innertrav[0]==0 {
+                                    builder.uneval_hack = Some(place);
+                                    // builder.simplification_memo.insert(place,place);
+                                } else {
+                                    memo.insert(x.innertrav[0],place);
+                                }
                                 stack.push(ArtificialStack{
                                     outercollect:Vec::new(),
                                     innercollect:Vec::new(),
@@ -425,14 +568,27 @@ impl PartialNTFA {
                         x.outertrav=&x.outertrav[1..];
                     } else {
                         let ff = stack.pop().unwrap();
-                        builder.insert_into_placeholder(ff.outercollect,ff.place);
+                        let rpv = builder.insert_into_placeholder(ff.outercollect,ff.place);
+                        match stack.last() {
+                            Some(x)=>{
+                                if rpv != ff.place {
+                                    if x.innertrav[0]==0 {panic!("what?")}
+                                    memo.insert(x.innertrav[0],rpv);//harmlessly replace old value
+                                }
+                            }
+                            None=>{
+                                memo.insert(*acc,rpv);//harmlessly replace old value
+                                accepting.push(rpv);
+                            }
+                        }
                         break;
                     }
                 }
             }
         }
-        match builder.union(accepting) {
+        match builder.nary_union(accepting) {
             Some(x) => {
+                builder.deplete_minification_queue();
                 Some((x,self.vm))
             }
             None=>None
