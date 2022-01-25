@@ -52,6 +52,7 @@ fn main() {
     println!("");
     println!("");
     println!("how can you trim pure loops?");
+    println!("getmergedvl has common code");
     println!("");
     println!("");
 

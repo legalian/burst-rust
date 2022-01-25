@@ -96,8 +96,8 @@ pub fn synthesize(
                     Some(oldstate)=>{
                         println!("intersecting...");
                         if let Some(intstate) = ntfabuilder.intersect(newntfa,oldstate) {
-                            // ntfabuilder.deplete_minification_queue();
-                            ntfabuilder.forget_minification_queue();
+                            ntfabuilder.deplete_minification_queue();
+                            // ntfabuilder.forget_minification_queue();
                             Some(intstate)
                         } else {
                             //mark into omega
