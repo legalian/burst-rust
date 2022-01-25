@@ -80,7 +80,7 @@ pub fn synthesize(
                     &mut accepting_states,
                     &mut graph_buffer,
                     &mut subexpressions,
-                    14
+                    12
                 );
                 println!("built!");
                 if newstate.is_none() {
@@ -96,7 +96,8 @@ pub fn synthesize(
                     Some(oldstate)=>{
                         println!("intersecting...");
                         if let Some(intstate) = ntfabuilder.intersect(newntfa,oldstate) {
-                            ntfabuilder.deplete_minification_queue();
+                            // ntfabuilder.deplete_minification_queue();
+                            ntfabuilder.forget_minification_queue();
                             Some(intstate)
                         } else {
                             //mark into omega

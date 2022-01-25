@@ -51,6 +51,7 @@ fn main() {
     println!("it's possible that you miss sharing opportunities because the revhash only contains the unsimplified versions UNTIL after construction is over.");
     println!("");
     println!("");
+    println!("how can you trim pure loops?");
     println!("");
     println!("");
 

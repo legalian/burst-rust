@@ -11,6 +11,7 @@ use crate::dsl::{*};
 use crate::nftabuilder::{*};
 // use crate::debug::{*};
 // use crate::queue::{*};
+use std::vec::IntoIter;
 use std::cmp::Ordering;
 use Ordering::{*};
 use Dsl::{*};
@@ -29,6 +30,26 @@ fn disjoint_union(mut a:HashMap<usize,usize>,b:HashMap<usize,usize>) -> Option<H
 fn disjoint_union_3(a:HashMap<usize,usize>,b:HashMap<usize,usize>,c:HashMap<usize,usize>) -> Option<HashMap<usize,usize>> {
     disjoint_union(a,b).and_then(|x|disjoint_union(x,c))
 }
+fn dedup_merge<T:Ord>(a:Vec<T>,b:Vec<T>) -> Vec<T> {
+    let mut c = Vec::with_capacity(a.len()+b.len());
+    let mut a=a.into_iter();
+    let mut b=b.into_iter();
+    let mut xx=(a.next(),b.next());
+    loop {
+        match xx {
+            (None,None)=>{return c;}
+            (Some(x),None)=>{c.push(x);c.extend(a);return c}
+            (None,Some(y))=>{c.push(y);c.extend(b);return c}
+            (Some(x),Some(y))=>{
+                if x<y {c.push(x);xx=(a.next(),Some(y));} else
+                if y<x {c.push(y);xx=(Some(x),b.next());} else
+                {c.push(x);xx=(a.next(),b.next());}
+            }
+        }
+    }
+}
+
+
 
 pub struct NTFABuilder {
     paths:Vec<Vec<(usize,Vec<usize>)>>,//inner vec must be sorted
@@ -76,6 +97,13 @@ impl NTFABuilder {
     //     for k in asdfj {self.purge(k);}
     // }
     fn indepth_simplify(&mut self,start:usize) {
+        // if !self.paths.iter().any(|x|x.iter().any(|(_,y)|y.contains(&start))) {
+        //     println!("just did one that is no longer useful");
+        // } else {
+        //     println!("yeah it's still useful");
+        // }
+
+
         // if !self.closed_expr.insert(start) {return;}
         let mut deps = self.paths[start].clone();
         let mut a=0;
@@ -88,19 +116,31 @@ impl NTFABuilder {
                     let bl = &deps[a+b].1;
                     let mut i=0;
                     while i<al.len() && al[i] == bl[i] {i+=1;}
-                    if i>=al.len() {
-                        panic!("it wasn't deduped!");
-                        // deps.remove(a+b);
-                        // b-=1;break;
-                    }
+                    // if i>=al.len() {
+                    //     panic!("it wasn't deduped!");
+                    //     // deps.remove(a+b);
+                    //     // b-=1;break;
+                    // }
                     let l=i;
                     i+=1;
                     while i<al.len() && al[i] == bl[i] {i+=1;}
                     if i>=al.len() {
-                        let tmp = self.union(al[l],bl[l]);
-                        deps[a+c].1[l]=tmp;
+                        let mut combo : Vec<_> = dedup_merge(self.paths[al[l]].clone(),self.paths[bl[l]].clone());
+                        let mut rstack = Vec::new();
+                        let mut d = b+1;
+                        while a+d<deps.len() && deps[a+d].0==f {
+                            if (0..deps[a+c].1.len()).all(|i|i==l || deps[a+d].1[i]==deps[a+c].1[i]) {
+                                combo = dedup_merge(combo,self.paths[deps[a+d].1[l]].clone());
+                                rstack.push(d);
+                            }
+                            d+=1;
+                        }
+                        // println!("stack: {} {:?}",b,rstack);
+                        for r in rstack.into_iter().rev() {deps.remove(a+r);}
                         deps.remove(a+b);
-                        b=0;break;
+                        let tmp = self.get_ntfa_unchecked(combo);
+                        deps[a+c].1[l]=tmp;
+                        b=c;break;
                     }
                 }
                 b+=1;
@@ -145,8 +185,12 @@ impl NTFABuilder {
             a+=b;
         } requires_further
     }
+    
     fn get_ntfa(&mut self,mut deps:Vec<(usize,Vec<usize>)>)->usize {
         NTFABuilder::small_simplification(&mut deps);
+        self.get_ntfa_unchecked(deps)
+    }
+    fn get_ntfa_unchecked(&mut self,deps:Vec<(usize,Vec<usize>)>)->usize {
         match self.revhash.entry(deps) {
             Occupied(x)=>*x.get(),
             Vacant(x)=>{
@@ -175,6 +219,9 @@ impl NTFABuilder {
                 x.insert(i); i
             }
         }
+    }
+    pub fn forget_minification_queue(&mut self) {
+        self.minification_queue = Vec::new();
     }
     pub fn deplete_minification_queue(&mut self) {
         while let Some(i) = self.minification_queue.pop() {
@@ -242,24 +289,24 @@ impl NTFABuilder {
         self.insert_into_placeholder(output,place);
         Some(place)
     }
-    pub fn union(&mut self,a:usize,b:usize) -> usize {
-        let st = self.paths.len();
-        let whwh : Vec<_> = self.paths[a].iter().cloned().chain(self.paths[b].iter().cloned()).collect();
-        if whwh.len()==0 {panic!()}
-        let vbvb = self.get_ntfa(whwh);
-        if self.paths.len()!=st {
-            if vbvb!=st {
-                panic!("fuck");
-            }
-            self.created_by_union.insert(vbvb);
-            if self.created_by_union.contains(&a) || self.created_by_union.contains(&b) {
-                println!("repeated union: {} u {} = {};",a,b,vbvb);
-            } else {
-                println!("new union: {} u {} = {};",a,b,vbvb);
-            }
-        }
-        vbvb
-    }
+    // pub fn union(&mut self,a:usize,b:usize) -> usize {
+    //     let st = self.paths.len();
+    //     let whwh : Vec<_> = self.paths[a].iter().cloned().chain(self.paths[b].iter().cloned()).collect();
+    //     if whwh.len()==0 {panic!()}
+    //     let vbvb = self.get_ntfa(whwh);
+    //     if self.paths.len()!=st {
+    //         if vbvb!=st {
+    //             panic!("fuck");
+    //         }
+    //         self.created_by_union.insert(vbvb);
+    //         if self.created_by_union.contains(&a) || self.created_by_union.contains(&b) {
+    //             println!("repeated union: {} u {} = {};",a,b,vbvb);
+    //         } else {
+    //             println!("new union: {} u {} = {};",a,b,vbvb);
+    //         }
+    //     }
+    //     vbvb
+    // }
     pub fn nary_union(&mut self,mut a:Vec<usize>) -> Option<usize> {
         if a.len()==0 {return None}
         if a.len()==1 {return Some(a.remove(0))}
@@ -498,100 +545,131 @@ impl PartialNTFA {
         }
         self.rules.entry(r).or_default().push((f,a));
     }
+    pub fn getmergedvl<T:Iterator<Item=usize>>(&self,ind:T)->IntoIter<(usize,Vec<Vec<usize>>)> {
+        let mut a=0;
+        let mut deps:Vec<(usize,Vec<Vec<usize>>)> = Vec::new();
+        for s in ind {deps.extend(self.rules.get(&s).into_iter().map(|ii|ii.iter().map(|(f,a)|(*f,a.iter().map(|x|vec![*x]).collect()))).flatten());}
+        deps.sort_unstable();
+        while a<deps.len()-1 {
+            let f = deps[a].0;
+            let mut b=1;
+            while deps[a+b].0==f {
+                for c in 0..b {
+                    let al = &deps[a+c].1;
+                    let bl = &deps[a+b].1;
+                    let mut i=0;
+                    while i<al.len() && al[i] == bl[i] {i+=1;}
+                    if i>=al.len() {
+                        deps.remove(a+b);
+                        b-=1;break;
+                    }
+                    let l=i;
+                    i+=1;
+                    while i<al.len() && al[i] == bl[i] {i+=1;}
+                    if i>=al.len() {
+                        let depr = take(&mut deps.remove(a+b).1[l]);
+                        deps[a+c].1[l] = dedup_merge(take(&mut deps[a+c].1[l]),depr);
+                        b=c;break;
+                    }
+                }
+                b+=1;
+                if a+b>=deps.len() {break;}
+            }
+            a+=b;
+        } deps.into_iter()
+    }
     pub fn convert(self,builder:&mut NTFABuilder,accstates:&HashSet<usize>)->Option<(usize,ValueMapper)> {
-        struct ArtificialStack<'a> {
+        if accstates.len()==0 {return None}
+        struct ArtificialStack {
             outercollect: Vec<(usize,Vec<usize>)>,
             innercollect: Vec<usize>,
-            outertrav:&'a [(usize,Vec<usize>)],
-            innertrav:&'a [usize],
+            outertrav: IntoIter<(usize,Vec<Vec<usize>>)>,
+            innertrav: Vec<Vec<usize>>,
             innertoken: usize,
             place:usize
         }
         let mut stack:Vec<ArtificialStack> = Vec::new();
-        let mut accepting:Vec<usize> = Vec::new();
-        let mut memo:HashMap<usize,usize> = HashMap::new();
-        for acc in accstates {
-            if let Some(y) = self.rules.get(acc) {
-                let place = builder.get_placeholder();
-                memo.insert(*acc,place);
-                stack.push(ArtificialStack{
-                    outercollect:Vec::new(),
-                    innercollect:Vec::new(),
-                    outertrav:&y[1..],
-                    innertrav:&y[0].1,
-                    innertoken:y[0].0,
-                    place
-                });
-            } else {continue;}
-            while let Some(x) = stack.last_mut() {
-                loop {
-                    if x.innertrav.len()>0 {
-                        if let Some(y) = {
-                            if x.innertrav[0]==0 {
-                                builder.uneval_hack
-                            } else {
-                                memo.get(&x.innertrav[0]).copied()
-                            }
-                        } {
-                            x.innercollect.push(y);
-                            x.innertrav=&x.innertrav[1..];
-                            continue;
-                        } else {
-                            if let Some(y) = self.rules.get(&x.innertrav[0]) {
+        let mut memo:HashMap<Vec<usize>,Option<usize>> = HashMap::new();
+
+        // you can no longer normally iterate with innertrav and outertrav. This is because you have many states instead of one.
+        // so.
+        // you instead iterate over.
+
+
+        // Are you allowed to destroy the partial ntfa?
+        // cause if so you can use an iterator.
+        // what kind does unions though?
+
+        // // the iterator would group by f.
+
+        // The iterator would use standard merge teqniques, and then output the result of that merge in a vec and put the iterator on the stack.
+
+        // that vec/iterator woudl have type   <(usize,Vec<Vec<usize>>)>
+
+
+
+        let mut snok = accstates.iter().copied().collect::<Vec<_>>();
+        snok.sort_unstable();
+        let place = builder.get_placeholder();
+        memo.insert(snok.clone(),Some(place));
+        let mut outertrav = self.getmergedvl(accstates.iter().copied());
+        let (innertoken,intv) = outertrav.next().unwrap();
+        stack.push(ArtificialStack{
+            outercollect:Vec::new(),
+            innercollect:Vec::new(),
+            outertrav,
+            innertoken,
+            innertrav:intv,
+            place,
+        });
+        loop {
+            let x = stack.last_mut().unwrap();
+            loop {
+                if let Some(subl) = x.innertrav.pop() {
+                    match if subl[0]==0 {builder.uneval_hack.map(|w|Some(w))} else {memo.get(&subl).copied()} {
+                        Some(Some(y))=>{x.innercollect.push(y);continue;}
+                        Some(None)=>{x.innercollect.clear();}
+                        None=>{
+                            let mut outertrav = self.getmergedvl(subl.iter().copied());
+                            if let Some((innertoken,intv)) = outertrav.next() {
                                 let place = builder.get_placeholder();
-                                if x.innertrav[0]==0 {
-                                    builder.uneval_hack = Some(place);
-                                    // builder.simplification_memo.insert(place,place);
-                                } else {
-                                    memo.insert(x.innertrav[0],place);
-                                }
+                                if subl[0]==0 {builder.uneval_hack = Some(place);} else {memo.insert(subl.clone(),Some(place));}
+                                x.innertrav.push(subl);
                                 stack.push(ArtificialStack{
                                     outercollect:Vec::new(),
                                     innercollect:Vec::new(),
-                                    outertrav:&y[1..],
-                                    innertrav:&y[0].1,
-                                    innertoken:y[0].0,
-                                    place
+                                    outertrav,
+                                    innertoken,
+                                    innertrav:intv,
+                                    place,
                                 });
                                 break;
-                            } else {
-                                x.innercollect.clear();
+                            } else {x.innercollect.clear();}
+                        }
+                    }
+                } else {
+                    let v = take(&mut x.innercollect);
+                    x.outercollect.push((x.innertoken,v));
+                }
+                if let Some((innertoken,intv))=x.outertrav.next() {
+                    x.innertoken=innertoken;
+                    x.innertrav=intv;
+                } else {
+                    let ff = stack.pop().unwrap();
+                    let rpv = if ff.outercollect.len()==0 {None} else {Some(builder.insert_into_placeholder(ff.outercollect,ff.place))};
+                    match stack.last() {
+                        Some(x)=>{
+                            if rpv != Some(ff.place) {
+                                let fl = x.innertrav.last().unwrap();
+                                if fl[0]==0 {panic!("what?")}
+                                memo.insert(fl.clone(),rpv);//harmlessly replace old value
                             }
                         }
-                    } else {
-                        let v = take(&mut x.innercollect);
-                        x.outercollect.push((x.innertoken,v));
+                        None=>{return rpv.map(|x|(x,self.vm))}
                     }
-                    if x.outertrav.len()>0 {
-                        x.innertoken=x.outertrav[0].0;
-                        x.innertrav=&x.outertrav[0].1;
-                        x.outertrav=&x.outertrav[1..];
-                    } else {
-                        let ff = stack.pop().unwrap();
-                        let rpv = builder.insert_into_placeholder(ff.outercollect,ff.place);
-                        match stack.last() {
-                            Some(x)=>{
-                                if rpv != ff.place {
-                                    if x.innertrav[0]==0 {panic!("what?")}
-                                    memo.insert(x.innertrav[0],rpv);//harmlessly replace old value
-                                }
-                            }
-                            None=>{
-                                memo.insert(*acc,rpv);//harmlessly replace old value
-                                accepting.push(rpv);
-                            }
-                        }
-                        break;
-                    }
+                    break;
                 }
             }
-        }
-        match builder.nary_union(accepting) {
-            Some(x) => {
-                builder.deplete_minification_queue();
-                Some((x,self.vm))
-            }
-            None=>None
         }
     }
 }
