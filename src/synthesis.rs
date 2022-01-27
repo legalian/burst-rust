@@ -80,7 +80,7 @@ pub fn synthesize(
                     &mut accepting_states,
                     &mut graph_buffer,
                     &mut subexpressions,
-                    12
+                    4
                 );
                 println!("built!");
                 if newstate.is_none() {
@@ -90,12 +90,14 @@ pub fn synthesize(
                     continue 'specloop
                 }
                 let (newntfa,newmapping) = newstate.unwrap();
+                ntfabuilder.output_tree(newntfa);
                 tables.push(newmapping);
                 opntfa = match opntfa {
                     None=>Some(newntfa),
                     Some(oldstate)=>{
                         println!("intersecting...");
                         if let Some(intstate) = ntfabuilder.intersect(newntfa,oldstate) {
+                            ntfabuilder.output_tree(intstate);
                             ntfabuilder.deplete_minification_queue();
                             // ntfabuilder.forget_minification_queue();
                             Some(intstate)

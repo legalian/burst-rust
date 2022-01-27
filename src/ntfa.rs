@@ -50,24 +50,91 @@ fn dedup_merge<T:Ord>(a:Vec<T>,b:Vec<T>) -> Vec<T> {
     }
 }
 
+struct OccuranceTracker {
+    // unconfirmed:HashSet<usize>,
+    // occurances:HashMap<usize,Vec<usize>>,
+}
 
+impl OccuranceTracker {
+    fn new() -> Self { 
+        OccuranceTracker{
+            // unconfirmed:HashSet::new(),
+            // occurances:HashMap::new()
+        }
+    }
+    fn add_unconfirmed(&mut self,a:usize) {
+        // self.unconfirmed.insert(a);
+        // self.occurances.insert(a,Vec::new());
+    }
+    fn forget(&mut self,a:usize) {
+        // self.unconfirmed.remove(&a);
+        // self.occurances.remove(&a);
+    }
+    fn depends_on(&mut self,a:usize,v:&Vec<(usize,Vec<usize>)>){
+        // for (_,w) in v {
+        //     for u in w {
+        //         if let Some(k) = self.occurances.get_mut(u) {
+        //             k.push(a);
+        //         }
+        //     }
+        // }
+    }
+    fn kill_unused_and_report(mut self,mut rtrack:Option<usize>,builder:&mut NTFABuilder)->Option<usize> {
+        // let mut stack : Vec<usize> = self.unconfirmed.iter().copied().collect();
+        // while let Some(a) = stack.pop() {
+        //     if !self.unconfirmed.contains(&a) {continue;}
+        //     if builder.paths[a].iter().any(|(_,y)|y.iter().all(|x|!self.unconfirmed.contains(x))) {
+        //         self.unconfirmed.remove(&a);
+        //         for j in self.occurances[&a].iter() {
+        //             if self.unconfirmed.contains(j) {
+        //                 stack.push(*j)
+        //             }
+        //         }
+        //     }
+        // }
+        // let mut rstack : Vec<(usize,Option<usize>)> = self.unconfirmed.into_iter().map(|x|(x,None)).collect();
+        // let mut visited = HashSet::new();
+        // while let Some((a,b)) = rstack.pop() {
+        //     if !visited.insert(a) {continue;}
+        //     if b.is_none() {println!("killing: {}",a)}
+        //     if rtrack==Some(a) {rtrack=b;}
+        //     for occurance in self.occurances[&a].iter().copied() {
+        //         let v = &mut builder.paths[occurance];
+        //         builder.revhash.remove(v);
+        //         match b {
+        //             Some(b) => {
+        //                 for (_,w) in v.iter_mut() {
+        //                     for u in w.iter_mut() {
+        //                         if *u==a {*u=b;}
+        //                     }
+        //                 }
+        //             }
+        //             None => {
+        //                 for i in (0..v.len()).rev() {
+        //                     if v[i].1.iter().any(|u|*u==a) {v.remove(i);}
+        //                 }
+        //             }
+        //         }
+        //         if v.len()==0 {
+        //             rstack.push((occurance,None));
+        //         } else {
+        //             match builder.revhash.entry(v.clone()) {
+        //                 Vacant(x)=>{x.insert(occurance);}
+        //                 Occupied(x)=>{rstack.push((occurance,Some(*x.get())));}
+        //             }
+        //         }
+        //     }
+        // }
+        rtrack
+    }
+}
 
 pub struct NTFABuilder {
-    paths:Vec<Vec<(usize,Vec<usize>)>>,//inner vec must be sorted
+    pub paths:Vec<Vec<(usize,Vec<usize>)>>,//inner vec must be sorted
     revhash:HashMap<Vec<(usize,Vec<usize>)>,usize>,
     intersect_memo:HashMap<Vec<(usize,usize)>,Option<usize>>,
-
-    // closed_expr:HashSet<usize>,
-
     uneval_hack:Option<usize>,
-
     minification_queue:Vec<usize>,
-
-
-    created_by_union:HashSet<usize>
-
-
-    // purge_memo:HashSet<usize>
 }
 impl NTFABuilder {
     pub fn new()->Self {
@@ -75,36 +142,11 @@ impl NTFABuilder {
             paths:Vec::new(),//inner vec must be sorted
             revhash:HashMap::new(),
             intersect_memo:HashMap::new(),
-            // closed_expr:HashSet::new(),
             uneval_hack:None,
-            // purge_memo:HashSet::new()
             minification_queue:Vec::new(),
-            created_by_union:HashSet::new()
         }
     }
-    // pub fn purge(&mut self,start:usize) {
-    //     if self.purge_memo.contains(&start) {
-    //         return;
-    //     }
-    //     self.purge_memo.insert(start);
-    //     let deps = &self.paths[start];
-    //     if deps.len()==0 {panic!("empty shit: {}",start)}
-    //     let mut asdfj = Vec::new();
-    //     for j in deps.iter() {
-    //         for k in j.1.iter() {
-    //             asdfj.push(*k);
-    //         }
-    //     }
-    //     for k in asdfj {self.purge(k);}
-    // }
     fn indepth_simplify(&mut self,start:usize) {
-        // if !self.paths.iter().any(|x|x.iter().any(|(_,y)|y.contains(&start))) {
-        //     println!("just did one that is no longer useful");
-        // } else {
-        //     println!("yeah it's still useful");
-        // }
-
-
         // if !self.closed_expr.insert(start) {return;}
         let mut deps = self.paths[start].clone();
         let mut a=0;
@@ -149,9 +191,6 @@ impl NTFABuilder {
             }
             a+=b;
         }
-        if NTFABuilder::check_requires_further(&deps) {
-            panic!("you didn't finish. TODO: remove {:?}",deps);
-        }
         self.revhash.insert(deps.clone(),start);
         self.paths[start] = deps;
     }
@@ -159,9 +198,6 @@ impl NTFABuilder {
         deps.sort_unstable();
         deps.dedup();
     }
-    // fn all_children_closed(&self,deps: &[(usize,Vec<usize>)])->bool {
-    //     deps.iter().all(|(_,x)|x.iter().all(|y|self.closed_expr.contains(y)))
-    // }
     fn check_requires_further(deps: &[(usize,Vec<usize>)])->bool {
         let mut requires_further = false;
         let mut a=0;
@@ -324,12 +360,16 @@ impl NTFABuilder {
             innertoken: usize,
             place:usize
         }
+        let mut tracker = OccuranceTracker::new();
         let mut stack:Vec<ArtificialStack> = Vec::new();
         let snok = vec![(min(a_start,b_start),max(a_start,b_start))];
         let place = self.get_placeholder();
         self.intersect_memo.insert(snok.clone(),Some(place));
         let mut outertrav = self.getmergedvl(snok);
-        let (innertoken,intv) = outertrav.next().unwrap();
+        let (innertoken,intv) = match outertrav.next() {
+            Some(x)=>x,None=>{return None;}
+        };
+        tracker.add_unconfirmed(place);
         stack.push(ArtificialStack{
             outercollect:Vec::new(),
             innercollect:Vec::new(),
@@ -353,6 +393,7 @@ impl NTFABuilder {
                                 let place = self.get_placeholder();
                                 self.intersect_memo.insert(subl.clone(),Some(place));
                                 x.innertrav.push(subl);
+                                tracker.add_unconfirmed(place);
                                 stack.push(ArtificialStack{
                                     outercollect:Vec::new(),
                                     innercollect:Vec::new(),
@@ -374,15 +415,20 @@ impl NTFABuilder {
                     x.innertrav=intv;
                 } else {
                     let ff = stack.pop().unwrap();
+                    tracker.depends_on(ff.place,&ff.outercollect);
                     let rpv = if ff.outercollect.len()==0 {None} else {Some(self.insert_into_placeholder(ff.outercollect,ff.place))};
                     match stack.last() {
                         Some(x)=>{
                             if rpv != Some(ff.place) {
+                                tracker.forget(ff.place);
                                 let fl = x.innertrav.last().unwrap();
                                 self.intersect_memo.insert(fl.clone(),rpv);//harmlessly replace old value
                             }
                         }
-                        None=>{return rpv}
+                        None=>{
+                            let rpv = tracker.kill_unused_and_report(rpv,self);
+                            return rpv
+                        }
                     }
                     break;
                 }
@@ -673,6 +719,7 @@ impl PartialNTFA {
         }
         let mut stack:Vec<ArtificialStack> = Vec::new();
         let mut memo:HashMap<Vec<usize>,Option<usize>> = HashMap::new();
+        let mut tracker = OccuranceTracker::new();
 
         let mut snok = accstates.iter().copied().collect::<Vec<_>>();
         snok.sort_unstable();
@@ -680,6 +727,7 @@ impl PartialNTFA {
         memo.insert(snok.clone(),Some(place));
         let mut outertrav = self.getmergedvl(accstates.iter().copied());
         let (innertoken,intv) = outertrav.next().unwrap();
+        tracker.add_unconfirmed(place);
         stack.push(ArtificialStack{
             outercollect:Vec::new(),
             innercollect:Vec::new(),
@@ -701,6 +749,7 @@ impl PartialNTFA {
                                 let place = builder.get_placeholder();
                                 if subl[0]==0 {builder.uneval_hack = Some(place);} else {memo.insert(subl.clone(),Some(place));}
                                 x.innertrav.push(subl);
+                                tracker.add_unconfirmed(place);
                                 stack.push(ArtificialStack{
                                     outercollect:Vec::new(),
                                     innercollect:Vec::new(),
@@ -722,16 +771,19 @@ impl PartialNTFA {
                     x.innertrav=intv;
                 } else {
                     let ff = stack.pop().unwrap();
+                    tracker.depends_on(ff.place,&ff.outercollect);
                     let rpv = if ff.outercollect.len()==0 {None} else {Some(builder.insert_into_placeholder(ff.outercollect,ff.place))};
                     match stack.last() {
                         Some(x)=>{
                             if rpv != Some(ff.place) {
+                                tracker.forget(ff.place);
                                 let fl = x.innertrav.last().unwrap();
                                 if fl[0]==0 {panic!("what?")}
                                 memo.insert(fl.clone(),rpv);//harmlessly replace old value
                             }
                         }
                         None=>{
+                            let rpv = tracker.kill_unused_and_report(rpv,builder);
                             builder.deplete_minification_queue();
                             return rpv.map(|x|(x,self.vm))
                         }
