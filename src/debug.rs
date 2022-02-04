@@ -32,55 +32,55 @@ pub fn debug_expectedlen(token:usize)->Option<usize> {
         _=>None
     }
 }
-impl NTFABuilder {
-    pub fn count_relevant_states(&self,a:usize) {
-        let mut relevant = HashSet::new();
-        let mut stack = vec![a];
-        while let Some(a) = stack.pop() {
-            if !relevant.insert(a) {continue;}
-            for (_,row) in self.paths[a].iter() {
-                stack.extend(row.iter().copied());
-            }
-        }
-        println!("relevant states: {}",relevant.len());
-    }
-    pub fn output_tree(&self,a:usize)->Result<(),Error> {
-        let mut relevant = HashMap::new();
-        relevant.insert(a,0);
-        let mut index = 1;
-        let mut queue = VecDeque::new();
-        queue.push_back((a,0));
-        let mut buffer = String::new();
-        while let Some((a,iu)) = queue.pop_front() {
-            if iu != 0 {buffer.write_char(',')?;}
-            for (iu,(f,row)) in self.paths[a].iter().enumerate() {
-                if iu != 0 {buffer.write_char('|')?;}
-                match f {
-                    0=>buffer.write_str("unit"),1=>buffer.write_str("input"),
-                    2=>buffer.write_str("pair"),
-                    3=>buffer.write_str("fst"),4=>buffer.write_str("snd"),
-                    5=>buffer.write_str("inl"),6=>buffer.write_str("inr"),
-                    7=>buffer.write_str("unl"),8=>buffer.write_str("unr"),
-                    9=>buffer.write_str("switch"),
-                    10=>buffer.write_str("recursion"),
-                    w=>buffer.write_fmt(format_args!("func{}",w))
-                }?;
-                buffer.write_char('(')?;
-                for (iu,r) in row.iter().enumerate() {
-                    if iu != 0 {buffer.write_char(',')?;}
-                    let ii = match relevant.entry(*r) {
-                        Occupied(x)=>{*x.get()}
-                        Vacant(x)=>{x.insert(index);queue.push_back((*r,index));index+=1;index-1}
-                    };
-                    buffer.write_fmt(format_args!("{}",ii))?;
-                }
-                buffer.write_char(')')?;
-            }
-        }
-        println!("FTA: {}",buffer);
-        Ok(())
-    }
-}
+// impl NTFABuilder {
+//     pub fn count_relevant_states(&self,a:usize) {
+//         let mut relevant = HashSet::new();
+//         let mut stack = vec![a];
+//         while let Some(a) = stack.pop() {
+//             if !relevant.insert(a) {continue;}
+//             for (_,row) in self.paths[a].iter() {
+//                 stack.extend(row.iter().copied());
+//             }
+//         }
+//         println!("relevant states: {}",relevant.len());
+//     }
+//     pub fn output_tree(&self,a:usize)->Result<(),Error> {
+//         let mut relevant = HashMap::new();
+//         relevant.insert(a,0);
+//         let mut index = 1;
+//         let mut queue = VecDeque::new();
+//         queue.push_back((a,0));
+//         let mut buffer = String::new();
+//         while let Some((a,iu)) = queue.pop_front() {
+//             if iu != 0 {buffer.write_char(',')?;}
+//             for (iu,(f,row)) in self.paths[a].iter().enumerate() {
+//                 if iu != 0 {buffer.write_char('|')?;}
+//                 match f {
+//                     0=>buffer.write_str("unit"),1=>buffer.write_str("input"),
+//                     2=>buffer.write_str("pair"),
+//                     3=>buffer.write_str("fst"),4=>buffer.write_str("snd"),
+//                     5=>buffer.write_str("inl"),6=>buffer.write_str("inr"),
+//                     7=>buffer.write_str("unl"),8=>buffer.write_str("unr"),
+//                     9=>buffer.write_str("switch"),
+//                     10=>buffer.write_str("recursion"),
+//                     w=>buffer.write_fmt(format_args!("func{}",w))
+//                 }?;
+//                 buffer.write_char('(')?;
+//                 for (iu,r) in row.iter().enumerate() {
+//                     if iu != 0 {buffer.write_char(',')?;}
+//                     let ii = match relevant.entry(*r) {
+//                         Occupied(x)=>{*x.get()}
+//                         Vacant(x)=>{x.insert(index);queue.push_back((*r,index));index+=1;index-1}
+//                     };
+//                     buffer.write_fmt(format_args!("{}",ii))?;
+//                 }
+//                 buffer.write_char(')')?;
+//             }
+//         }
+//         println!("FTA: {}",buffer);
+//         Ok(())
+//     }
+// }
 
 struct NTFAline {
     token:usize,
