@@ -51,95 +51,14 @@ fn dedup_merge<T:Ord>(a:Vec<T>,b:Vec<T>) -> Vec<T> {
         }
     }
 }
-#[derive(Clone,PartialEq,PartialOrd,Eq,Ord,Hash)]
-pub enum Ref {
-    DeBruijn(usize),
-    Absolute(usize,Vec<usize>)
-}
-use Ref::{*};
+
 pub struct NTFABuilder {
-    pub paths:Vec<Vec<(usize,Vec<Ref>)>>,//inner vec must be sorted
-    revhash:HashMap<Vec<(usize,Vec<Ref>)>,usize>,
-    intersect_memo:HashMap<(Ref,Ref),IRTripletResult>,
-    rename_memo:HashMap<(usize,Vec<Ref>),Ref>,
+    pub paths:Vec<Vec<(usize,Vec<usize>)>>,//inner vec must be sorted
+    revhash:HashMap<Vec<(usize,Vec<usize>)>,usize>,
+    intersect_memo:HashMap<(usize,usize),(Option<usize>,Option<usize>,Option<usize>)>,//left side of key is less than right side
+    rename_memo:HashMap<(usize,Vec<usize>),usize>,
     subset_memo:HashMap<(usize,usize),bool>,
     minification_queue:Vec<usize>,
-}
-
-#[derive(Hash,Clone,PartialEq,Eq,PartialOrd,Ord)]
-pub enum IRRow {
-    Conc(Ref),
-    Union(Box<IRRow>,Box<IRRow>),
-    Difference(Box<IRRow>,Box<IRRow>),
-    Intersection(Box<IRRow>,Box<IRRow>)
-}
-use IRRow::{*};
-impl IRRow {
-    fn intersect(self,other:IRRow)->IRRow {
-        if let (Conc(Absolute(_,_)),Conc(Absolute(_,_))) = (&self,&other) {panic!()}
-        if self<other {Intersection(Box::new(self),Box::new(other))}
-        else {Intersection(Box::new(other),Box::new(self))}
-    }
-    // fn downshift(&mut self,builder:&mut NTFABuilder,a:&Ref) {
-    //     let mut stack = vec![self];
-    //     while let Some(x)=stack.pop() {
-    //         match x {
-    //             Conc(w@DeBruijn(0))=>{*w=a.clone()},
-    //             Conc(DeBruijn(x))=>{*x-=1;},
-    //             Conc(w@Absolute(x,r))=>match a {
-    //                 DeBruijn(i)=>{
-    //                     for r in r.iter_mut() {
-    //                         if *r==0 {*r=*i}
-    //                     }
-    //                 }
-    //                 Absolute(_,_)=>{
-    //                     *w=builder.renamedirect(x,)
-
-    //                 }
-    //             },
-    //             Union(a,b)=>{stack.push(a);stack.push(b)},
-    //             LeftDifference(a,b)=>{stack.push(a);stack.push(b)}
-    //             Intersection(a,b)=>{stack.push(a);stack.push(b)}
-    //             RightDifference(a,b)=>{stack.push(a);stack.push(b)}
-    //         }
-    //     }
-    // }
-}
-pub enum IRTripletResult {
-    QualifiedSync(usize,usize,usize,Vec<IRRow>),
-    JustSync(IRRow,IRRow,IRRow)
-}
-use IRTripletResult::{*};
-pub enum IRSimpleResult {
-    QualifiedSingle(usize,Vec<IRRow>),
-    JustSingle(IRRow)
-}
-use IRSimpleResult::{*};
-//need the rename memo
-
-struct DiscreteReference {
-    assoc:HashMap<IRRow,usize>,
-    reserved:Vec<IRRow>
-}
-impl DiscreteReference {
-    fn new()->Self {
-        DiscreteReference {
-            assoc:HashMap::new(),
-            reserved:Vec::new()
-        }
-    }
-    fn reserve(&mut self,row:IRRow)->usize {
-        match self.assoc.entry(row) {
-            Occupied(x)=>{*x.get()}
-            Vacant(x)=>{
-                self.reserved.push(x.key().clone());
-                self.reserved.len()-1
-            }
-        }
-    }
-}
-impl Default for DiscreteReference {
-    fn default()->Self {DiscreteReference::new()}
 }
 
 impl NTFABuilder {
@@ -153,14 +72,13 @@ impl NTFABuilder {
             minification_queue:Vec::new(),
         }
     }
-    fn intersect(&mut self,mut a_start:usize,mut b_start:usize)->IRTripletResult {
+    fn intersect(&mut self,mut a_start:usize,mut b_start:usize)->(usize,usize,usize) {
         if b_start<a_start {swap(&mut a_start,&mut b_start)}
         struct OuterStack {
             a_start:usize,b_start:usize,
             ai:usize,bi:usize,
-            totalaa:Vec<(usize,Vec<Ref>)>,
-            totalbb:Vec<(usize,Vec<Ref>)>,
-            disc_ref:DiscreteReference,
+            totalaa:Vec<(usize,Vec<usize>)>,
+            totalbb:Vec<(usize,Vec<usize>)>,
             innerstack:Vec<InnerStack>
         }
         struct InnerStack {
@@ -172,17 +90,16 @@ impl NTFABuilder {
             abase:usize,
             bbase:usize,
             yi:usize,
-            totalab:Vec<Vec<Ref>>,
-            bp : Vec<Option<Ref>>,
-            ap : Ref,
-            yab : Option<Vec<Ref>>
+            totalab:Vec<Vec<usize>>,
+            bp : Vec<Option<usize>>,
+            ap : usize,
+            yab : Option<Vec<usize>>
         }
         let mut outerstack:Vec<OuterStack>=Vec::new();
 
         let mut ai=0;let mut bi=0;
         let mut totalaa = Vec::new();
         let mut totalbb = Vec::new();
-        let mut disc_ref = DiscreteReference::new();
 
         let mut innerstack:Vec<InnerStack>=Vec::new();
 
@@ -210,31 +127,21 @@ impl NTFABuilder {
                             }
                         } else {Vec::new()};
                         // let mut rw = if let Some(z)=rw {z} else {continue 'innerloop;};
-                        let (xaa,xab,xbb) : (Option<Ref>,Option<Ref>,Option<Ref>) = {
-                            match (&ap,bps) {
-                                (DeBruijn(u),DeBruijn(w)) if *u==*w =>(
-                                    None,
-                                    Some(DeBruijn(disc_ref.reserve(Conc(DeBruijn(*u))))),
-                                    None
-                                ),
-                                (u@DeBruijn(_),w)|(u,w@DeBruijn(_)) =>(
-                                    Some(DeBruijn(disc_ref.reserve(Difference(Box::new(Conc((*u).clone())),Box::new(Conc(w.clone())))))),
-                                    Some(DeBruijn(disc_ref.reserve(Conc((*u).clone()).intersect(Conc(w.clone()))))),
-                                    Some(DeBruijn(disc_ref.reserve(Difference(Box::new(Conc(w.clone())),Box::new(Conc((*u).clone()))))))
-                                ),
-                                (Absolute(g,gr),Absolute(j,jr))=>if *g==*j && *gr==*jr {(
-                                    None,
-                                    Some(Absolute(*g,gr.clone())),
-                                    None
-                                )} else {
-                                    outerstack.push(OuterStack{
-                                        a_start,b_start,
-                                        ai,bi,
-                                        totalaa:take(&mut totalaa),totalbb:take(&mut totalbb),
-                                        disc_ref:take(&mut disc_ref),
-                                        innerstack:take(&mut innerstack)
-                                    });
-                                    continue 'outerloop;
+                        let (xaa,xab,xbb) : (Option<usize>,Option<usize>,Option<usize>) = {
+                            if *ap==*bps {(None,Some(*ap),None)}
+                            else {
+                                match self.intersect_memo.entry((min(*ap,*bps),max(*ap,*bps))) {
+                                    Occupied(z)=>{*z.get()}
+                                    Vacant(z)=>{
+                                        
+                                        outerstack.push(OuterStack{
+                                            a_start,b_start,
+                                            ai,bi,
+                                            totalaa:take(&mut totalaa),totalbb:take(&mut totalbb),
+                                            innerstack:take(&mut innerstack)
+                                        });
+                                        continue 'outerloop;
+                                    }
                                 }
                             }
                         };
@@ -312,246 +219,139 @@ impl NTFABuilder {
                 ai=o.ai;bi=o.bi;
                 totalaa=o.totalaa;
                 totalbb=o.totalbb;
-                disc_ref=o.disc_ref;
                 innerstack=o.innerstack;
             } else {
                 panic!()
             }
         }
     }
-    fn rename(&mut self,a:Ref,rz:Vec<Ref>)->Ref {
-        match a {
-            DeBruijn(x)=>rz[x].clone(),
-            Absolute(az,rp)=>{
-                let mut allr = true;
-                let ra : (usize,Vec<Ref>) = (az,rp.into_iter().map(|x|{
-                    if let Absolute(_,_) = rz[x] {allr=false;}
-                    rz[x].clone()
-                }).collect());
-                if allr {
-                    return Absolute(ra.0,ra.1.into_iter().map(|y|match y {DeBruijn(x)=>x,Absolute(_,_)=>panic!()}).collect());
-                }
-                self.renamedirect(ra.0,ra.1)
-            }
-        }
-    }
-    fn renamedirect(&mut self,a:usize,rz:Vec<Ref>)->Ref {
-        let mut ra = (a,rz);
-        if let Some(x) = self.rename_memo.get(&ra) {return x.clone()}
-        struct ArtificialStack {
-            ar:(usize,Vec<Ref>),
-            innercol:Vec<Ref>,
-            outercol:Vec<(usize,Vec<Ref>)>
-        }
-        let mut stack : Vec<ArtificialStack> = Vec::new();
-        let mut innercol:Vec<Ref> = Vec::new();
-        let mut outercol:Vec<(usize,Vec<Ref>)> = Vec::new();
-        'sloop: loop {
-            for (f,bz) in self.paths[ra.0][outercol.len()..].iter() {
-                for az in bz[innercol.len()..].iter() {
-                    let tr = match az {
-                        DeBruijn(x)=>ra.1[*x].clone(),
-                        Absolute(b,rp)=>{
-                            let mut allr = true;
-                            let rb2 : (usize,Vec<Ref>) = (*b,rp.into_iter().map(|x|{
-                                if let Absolute(_,_) = &ra.1[*x] {allr=false;}
-                                ra.1[*x].clone()
-                            }).collect());
-                            if allr {Absolute(*b,rb2.1.into_iter().map(|y|match y {DeBruijn(x)=>x,Absolute(_,_)=>panic!()}).collect())}
-                            else if let Some(x) = self.rename_memo.get(&rb2) {x.clone()}
-                            else {
-                                stack.push(ArtificialStack{ar:take(&mut ra),innercol:take(&mut innercol),outercol:take(&mut outercol)});
-                                ra=(*b,rb2.1);
-                                continue 'sloop;
-                            }
-                        }
-                    };
-                    innercol.push(tr);
-                }
-                outercol.push((*f,take(&mut innercol)));
-            }
-            let (na,nr) = self.get_ntfa(outercol);
-            let res = Absolute(na,nr);
-            if let Some(o) = stack.pop() {
-                self.rename_memo.insert(ra,res);
-                ra=o.ar;innercol=o.innercol;outercol=o.outercol;
-            }
-            else {
-                self.rename_memo.insert(ra,res.clone());
-                break res;
-            }
-        }
-    }
-    fn get_ntfa(&mut self,mut deps:Vec<(usize,Vec<Ref>)>)->(usize,Vec<usize>) {
-        let mut assoc:HashMap<usize,usize> = HashMap::new();
-        let mut retmap:Vec<usize>=Vec::new();
-        for (_,row) in deps.iter_mut() {
-            for item in row.iter_mut() {
-                match item {
-                    DeBruijn(a)=>{
-                        *a=match assoc.entry(*a) {
-                            Occupied(x) => *x.get(),
-                            Vacant(x) => {
-                                x.insert(retmap.len());
-                                retmap.push(*a);
-                                retmap.len()-1
-                            }
-                        };
+
+    fn indepth_simplify(&mut self,start:usize) {
+        // if !self.closed_expr.insert(start) {return;}
+        let mut deps = self.paths[start].clone();
+        let mut a=0;
+        while a<deps.len()-1 {
+            let f = deps[a].0;
+            let mut b=1;
+            while deps[a+b].0==f {
+                for c in 0..b {
+                    let al = &deps[a+c].1;
+                    let bl = &deps[a+b].1;
+                    let mut i=0;
+                    while i<al.len() && al[i] == bl[i] {i+=1;}
+                    if i>=al.len() {
+                        panic!("it wasn't deduped!");
+                        // deps.remove(a+b);
+                        // b-=1;break;
                     }
-                    Absolute(_,r) => {
-                        for sr in r.iter_mut() {
-                            *sr=match assoc.entry(*sr) {
-                                Occupied(x) => *x.get(),
-                                Vacant(x) => {
-                                    x.insert(retmap.len());
-                                    retmap.push(*sr);
-                                    retmap.len()-1
-                                }
-                            };
+                    let l=i;
+                    i+=1;
+                    while i<al.len() && al[i] == bl[i] {i+=1;}
+                    if i>=al.len() {
+                        let mut combo : Vec<_> = dedup_merge(self.paths[al[l]].clone(),self.paths[bl[l]].clone());
+                        let mut rstack = Vec::new();
+                        let mut d = b+1;
+                        while a+d<deps.len() && deps[a+d].0==f {
+                            if (0..deps[a+c].1.len()).all(|i|i==l || deps[a+d].1[i]==deps[a+c].1[i]) {
+                                combo = dedup_merge(combo,self.paths[deps[a+d].1[l]].clone());
+                                rstack.push(d);
+                            }
+                            d+=1;
                         }
+                        // println!("stack: {} {:?}",b,rstack);
+                        for r in rstack.into_iter().rev() {deps.remove(a+r);}
+                        deps.remove(a+b);
+                        let tmp = self.get_ntfa_unchecked(combo);
+                        deps[a+c].1[l]=tmp;
+                        b=0;break;
                     }
                 }
+                b+=1;
+                if a+b>=deps.len() {break;}
             }
+            a+=b;
         }
-        (match self.revhash.entry(deps) {
+        self.revhash.insert(deps.clone(),start);
+        self.paths[start] = deps;
+    }
+    fn small_simplification(deps: &mut Vec<(usize,Vec<usize>)>) {
+        deps.sort_unstable();
+        deps.dedup();
+    }
+    fn check_requires_further(deps: &[(usize,Vec<usize>)])->bool {
+        let mut requires_further = false;
+        let mut a=0;
+        'outer: while a<deps.len()-1 {
+            let f = deps[a].0;
+            let mut b=1;
+            while deps[a+b].0==f {
+                for c in 0..b {
+                    let al = &deps[a+c].1;
+                    let bl = &deps[a+b].1;
+                    let mut i=0;
+                    while i<al.len() && al[i] == bl[i] {i+=1;}
+                    if i>=al.len() {panic!("wasn't deduped...")}
+                    i+=1;
+                    while i<al.len() && al[i] == bl[i] {i+=1;}
+                    if i>=al.len() {
+                        // println!("rewuires: {}   {:?} {:?}",f,al,bl);
+                        requires_further=true;
+                        break 'outer;
+                    }
+                }
+                b+=1;
+                if a+b>=deps.len() {break;}
+            }
+            a+=b;
+        } requires_further
+    }
+    
+    fn get_ntfa(&mut self,mut deps:Vec<(usize,Vec<usize>)>)->usize {
+        NTFABuilder::small_simplification(&mut deps);
+        self.get_ntfa_unchecked(deps)
+    }
+    fn get_ntfa_unchecked(&mut self,deps:Vec<(usize,Vec<usize>)>)->usize {
+        match self.revhash.entry(deps) {
             Occupied(x)=>*x.get(),
             Vacant(x)=>{
                 let i=self.paths.len();
-                // if NTFABuilder::check_requires_further(x.key()) {
-                //     self.minification_queue.push(i);
-                // }
+                if NTFABuilder::check_requires_further(x.key()) {
+                    self.minification_queue.push(i);
+                }
                 self.paths.push(x.key().clone());
                 x.insert(i); i
             }
-        },retmap)
+        }
     }
 
-    // fn indepth_simplify(&mut self,start:usize) {
-    //     // if !self.closed_expr.insert(start) {return;}
-    //     let mut deps = self.paths[start].clone();
-    //     let mut a=0;
-    //     while a<deps.len()-1 {
-    //         let f = deps[a].0;
-    //         let mut b=1;
-    //         while deps[a+b].0==f {
-    //             for c in 0..b {
-    //                 let al = &deps[a+c].1;
-    //                 let bl = &deps[a+b].1;
-    //                 let mut i=0;
-    //                 while i<al.len() && al[i] == bl[i] {i+=1;}
-    //                 if i>=al.len() {
-    //                     panic!("it wasn't deduped!");
-    //                     // deps.remove(a+b);
-    //                     // b-=1;break;
-    //                 }
-    //                 let l=i;
-    //                 i+=1;
-    //                 while i<al.len() && al[i] == bl[i] {i+=1;}
-    //                 if i>=al.len() {
-    //                     let mut combo : Vec<_> = dedup_merge(self.paths[al[l]].clone(),self.paths[bl[l]].clone());
-    //                     let mut rstack = Vec::new();
-    //                     let mut d = b+1;
-    //                     while a+d<deps.len() && deps[a+d].0==f {
-    //                         if (0..deps[a+c].1.len()).all(|i|i==l || deps[a+d].1[i]==deps[a+c].1[i]) {
-    //                             combo = dedup_merge(combo,self.paths[deps[a+d].1[l]].clone());
-    //                             rstack.push(d);
-    //                         }
-    //                         d+=1;
-    //                     }
-    //                     // println!("stack: {} {:?}",b,rstack);
-    //                     for r in rstack.into_iter().rev() {deps.remove(a+r);}
-    //                     deps.remove(a+b);
-    //                     let tmp = self.get_ntfa_unchecked(combo);
-    //                     deps[a+c].1[l]=tmp;
-    //                     b=0;break;
-    //                 }
-    //             }
-    //             b+=1;
-    //             if a+b>=deps.len() {break;}
-    //         }
-    //         a+=b;
-    //     }
-    //     self.revhash.insert(deps.clone(),start);
-    //     self.paths[start] = deps;
-    // }
-    // fn small_simplification(deps: &mut Vec<(usize,Vec<usize>)>) {
-    //     deps.sort_unstable();
-    //     deps.dedup();
-    // }
-    // fn check_requires_further(deps: &[(usize,Vec<usize>)])->bool {
-    //     let mut requires_further = false;
-    //     let mut a=0;
-    //     'outer: while a<deps.len()-1 {
-    //         let f = deps[a].0;
-    //         let mut b=1;
-    //         while deps[a+b].0==f {
-    //             for c in 0..b {
-    //                 let al = &deps[a+c].1;
-    //                 let bl = &deps[a+b].1;
-    //                 let mut i=0;
-    //                 while i<al.len() && al[i] == bl[i] {i+=1;}
-    //                 if i>=al.len() {panic!("wasn't deduped...")}
-    //                 i+=1;
-    //                 while i<al.len() && al[i] == bl[i] {i+=1;}
-    //                 if i>=al.len() {
-    //                     // println!("rewuires: {}   {:?} {:?}",f,al,bl);
-    //                     requires_further=true;
-    //                     break 'outer;
-    //                 }
-    //             }
-    //             b+=1;
-    //             if a+b>=deps.len() {break;}
-    //         }
-    //         a+=b;
-    //     } requires_further
-    // }
-    
-    // fn get_ntfa(&mut self,mut deps:Vec<(usize,Vec<usize>)>)->usize {
-    //     NTFABuilder::small_simplification(&mut deps);
-    //     self.get_ntfa_unchecked(deps)
-    // }
-    // fn get_ntfa_unchecked(&mut self,deps:Vec<(usize,Vec<usize>)>)->usize {
-    //     match self.revhash.entry(deps) {
-    //         Occupied(x)=>*x.get(),
-    //         Vacant(x)=>{
-    //             let i=self.paths.len();
-    //             if NTFABuilder::check_requires_further(x.key()) {
-    //                 self.minification_queue.push(i);
-    //             }
-    //             self.paths.push(x.key().clone());
-    //             x.insert(i); i
-    //         }
-    //     }
-    // }
+    fn get_placeholder(&mut self)->usize {
+        self.paths.push(vec![]);
+        self.paths.len()-1
+    }
 
-    // fn get_placeholder(&mut self)->usize {
-    //     self.paths.push(vec![]);
-    //     self.paths.len()-1
-    // }
+    fn insert_into_placeholder(&mut self,mut deps:Vec<(usize,Vec<usize>)>,i:usize)->usize {
+        NTFABuilder::small_simplification(&mut deps);
+        match self.revhash.entry(deps) {
+            Occupied(x)=>*x.get(),//release i back to the cluster...
+            Vacant(x)=>{
+                if NTFABuilder::check_requires_further(x.key()) {
+                    self.minification_queue.push(i);
+                }
+                self.paths[i]=x.key().clone();
+                x.insert(i); i
+            }
+        }
+    }
 
-    // fn insert_into_placeholder(&mut self,mut deps:Vec<(usize,Vec<usize>)>,i:usize)->usize {
-    //     NTFABuilder::small_simplification(&mut deps);
-    //     match self.revhash.entry(deps) {
-    //         Occupied(x)=>*x.get(),//release i back to the cluster...
-    //         Vacant(x)=>{
-    //             if NTFABuilder::check_requires_further(x.key()) {
-    //                 self.minification_queue.push(i);
-    //             }
-    //             self.paths[i]=x.key().clone();
-    //             x.insert(i); i
-    //         }
-    //     }
-    // }
+    pub fn forget_minification_queue(&mut self) {
+        self.minification_queue = Vec::new();
+    }
 
-    // pub fn forget_minification_queue(&mut self) {
-    //     self.minification_queue = Vec::new();
-    // }
-
-    // pub fn deplete_minification_queue(&mut self) {
-    //     while let Some(i) = self.minification_queue.pop() {
-    //         self.indepth_simplify(i);
-    //     }
-    // }
+    pub fn deplete_minification_queue(&mut self) {
+        while let Some(i) = self.minification_queue.pop() {
+            self.indepth_simplify(i);
+        }
+    }
 
     // pub fn getmergedvl(&self,ind:Vec<(usize,usize)>)->IntoIter<(usize,Vec<Vec<(usize,usize)>>)> {
     //     let mut buf_a:Vec<(usize,Vec<usize>)>;let mut buf_b:Vec<(usize,Vec<usize>)>;
@@ -710,72 +510,65 @@ impl NTFABuilder {
     //     }
     // }
 
-    // pub fn nary_union(&mut self,mut a:Vec<usize>) -> Option<usize> {
-    //     if a.len()==0 {return None}
-    //     if a.len()==1 {return Some(a.remove(0))}
-    //     let mut total:Vec<(usize,Vec<usize>)> = Vec::new();
-    //     for b in a {total.extend(self.paths[b].clone());}
-    //     Some(self.get_ntfa(total))
-    // }
-    // pub fn get_accepting_run(
-    //     &self,
-    //     start:usize,
-    //     builder:&mut ExpressionBuilder,
-    //     map:&[ValueMapper]
-    // ) -> Vec<(Dsl,usize,HashMap<usize,usize>)> {
-    //     let mut queue : BinaryHeap<SolutionStatusWrap> = BinaryHeap::new();
-    //     queue.push(SolutionStatusWrap(start,0,None));
-    //     let mut solns : HashMap<usize,Vec<Rc<SolutionStatus>>> = HashMap::new();
-    //     let mut working : HashMap<usize,Vec<(&[usize],Vec<Rc<SolutionStatus>>,usize,usize,usize)>> = HashMap::new();
-    //     let mut visited : HashSet<usize> = HashSet::new();
-    //     while let Some(SolutionStatusWrap(x,minsize,updown)) = queue.pop() {
-    //         let mut stack:Vec<(&[usize],Vec<Rc<SolutionStatus>>,usize,usize,usize)> = Vec::new();
-    //         match updown {
-    //             None=>{
-    //                 if !visited.insert(x) {continue;}
-    //                 let y = &self.paths[x];
-    //                 if let Some((f,_)) = y.iter().find(|(_,x)|x.len()==0) {
-    //                     for sol in SolutionStatus::transfix(*f,&vec![],map,builder) {
-    //                         queue.push(SolutionStatusWrap(x,minsize+1,Some(sol)));
-    //                     }
-    //                 } else {
-    //                     for (f,l) in y.iter() {
-    //                         if l.contains(&x) {continue;}
-    //                         stack.push((l,Vec::new(),*f,x,1+minsize));
-    //                     }
-    //                 }
-    //             }
-    //             Some(sol)=>{
-    //                 let sol = match sol.insert(solns.entry(x).or_default()) {None=>{continue;},Some(x)=>x};
-    //                 for (l,v,f,y,minsize) in working.get(&x).into_iter().flatten() {
-    //                     let mut v2=v.clone();
-    //                     v2.push(sol.clone());
-    //                     stack.push((l,v2,*f,*y,minsize+sol.size));
-    //                 }
-    //             }
-    //         }
-    //         while let Some((l,v,f,x,minsize)) = stack.pop() {
-    //             if l.len()==0 {
-    //                 for sol in SolutionStatus::transfix(f,&v,map,builder) {
-    //                     queue.push(SolutionStatusWrap(x,minsize,Some(sol)));
-    //                 }
-    //                 continue;
-    //             }
-    //             queue.push(SolutionStatusWrap(l[0],minsize,None));
-    //             for sol in solns.get(&l[0]).into_iter().flatten().cloned() {
-    //                 let mut v2=v.clone();
-    //                 let msz = minsize+sol.size;
-    //                 v2.push(sol);
-    //                 stack.push((&l[1..],v2,f,x,msz));
-    //             }
-    //             working.entry(l[0]).or_default().push((&l[1..],v,f,x,minsize));
-    //         }
-    //     }
-    //     solns.remove(&start).unwrap_or_default().into_iter().map(|x|{
-    //         let SolutionStatus{dsl:a,size:b,mapping:c,..} = &*x;
-    //         (a.clone(),*b,c.as_ref().map(|x|(**x).clone()).unwrap_or_default())
-    //     }).collect()
-    // }
+    pub fn get_accepting_run(
+        &self,
+        start:usize,
+        builder:&mut ExpressionBuilder,
+        map:&[ValueMapper]
+    ) -> Vec<(Dsl,usize,HashMap<usize,usize>)> {
+        let mut queue : BinaryHeap<SolutionStatusWrap> = BinaryHeap::new();
+        queue.push(SolutionStatusWrap(start,0,None));
+        let mut solns : HashMap<usize,Vec<Rc<SolutionStatus>>> = HashMap::new();
+        let mut working : HashMap<usize,Vec<(&[usize],Vec<Rc<SolutionStatus>>,usize,usize,usize)>> = HashMap::new();
+        let mut visited : HashSet<usize> = HashSet::new();
+        while let Some(SolutionStatusWrap(x,minsize,updown)) = queue.pop() {
+            let mut stack:Vec<(&[usize],Vec<Rc<SolutionStatus>>,usize,usize,usize)> = Vec::new();
+            match updown {
+                None=>{
+                    if !visited.insert(x) {continue;}
+                    let y = &self.paths[x];
+                    if let Some((f,_)) = y.iter().find(|(_,x)|x.len()==0) {
+                        for sol in SolutionStatus::transfix(*f,&vec![],map,builder) {
+                            queue.push(SolutionStatusWrap(x,minsize+1,Some(sol)));
+                        }
+                    } else {
+                        for (f,l) in y.iter() {
+                            if l.contains(&x) {continue;}
+                            stack.push((l,Vec::new(),*f,x,1+minsize));
+                        }
+                    }
+                }
+                Some(sol)=>{
+                    let sol = match sol.insert(solns.entry(x).or_default()) {None=>{continue;},Some(x)=>x};
+                    for (l,v,f,y,minsize) in working.get(&x).into_iter().flatten() {
+                        let mut v2=v.clone();
+                        v2.push(sol.clone());
+                        stack.push((l,v2,*f,*y,minsize+sol.size));
+                    }
+                }
+            }
+            while let Some((l,v,f,x,minsize)) = stack.pop() {
+                if l.len()==0 {
+                    for sol in SolutionStatus::transfix(f,&v,map,builder) {
+                        queue.push(SolutionStatusWrap(x,minsize,Some(sol)));
+                    }
+                    continue;
+                }
+                queue.push(SolutionStatusWrap(l[0],minsize,None));
+                for sol in solns.get(&l[0]).into_iter().flatten().cloned() {
+                    let mut v2=v.clone();
+                    let msz = minsize+sol.size;
+                    v2.push(sol);
+                    stack.push((&l[1..],v2,f,x,msz));
+                }
+                working.entry(l[0]).or_default().push((&l[1..],v,f,x,minsize));
+            }
+        }
+        solns.remove(&start).unwrap_or_default().into_iter().map(|x|{
+            let SolutionStatus{dsl:a,size:b,mapping:c,..} = &*x;
+            (a.clone(),*b,c.as_ref().map(|x|(**x).clone()).unwrap_or_default())
+        }).collect()
+    }
 }
 
 
