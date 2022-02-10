@@ -282,7 +282,7 @@ impl NTFABuilder {
         subexpressions : &mut HashMap<usize,HashSet<usize>>,
         k:usize
     )->Option<(usize,ValueMapper)> {
-        println!("-=-=-=-=-=-=-=-=-=- BEGINNING BUILD PHASE: {:?}",DebugTypedValue{val:input,ty:input_type,expr:builder});
+        // println!("-=-=-=-=-=-=-=-=-=- BEGINNING BUILD PHASE: {:?}",DebugTypedValue{val:input,ty:input_type,expr:builder});
         #[derive(Default)]
         struct StackElem {
             input : usize,
