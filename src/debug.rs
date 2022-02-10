@@ -2,12 +2,12 @@
 use crate::dsl::{Dsl,ExpressionContext};
 use crate::mlsparser::{Program,Value,Type};
 use crate::nftabuilder::{ExpressionBuilder,ProcType,ProcValue,Constname};
-use crate::ntfa::{PartialNTFA,NTFABuilder};
-use std::fmt::Write;
+// use crate::ntfa::{PartialNTFA,NTFABuilder};
+// use std::fmt::Write;
 use core::fmt::{Debug,Formatter,Error};
-use std::collections::HashMap;
-use std::collections::VecDeque;
-use std::collections::hash_map::Entry::*;
+// use std::collections::HashMap;
+// use std::collections::VecDeque;
+// use std::collections::hash_map::Entry::*;
 use std::collections::HashSet;
 use std::rc::Rc;
 use Dsl::{*};
@@ -139,18 +139,18 @@ impl<'a> Debug for AcceptingStates<'a> {
 }
 
 
-impl Debug for PartialNTFA {
-    fn fmt(&self, f: &mut Formatter) -> Result<(),Error> {
-        let mut builder = f.debug_list();
-        for (last,ab) in &self.rules {
-            if ab.len()==0 {panic!("empty entry")}
-            for (tok,rest) in ab {
-                builder.entry(&NTFAline{token:*tok,arglist:rest.iter().copied().map(number_to_string).collect(),fin:number_to_string(*last)});
-            }
-        }
-        builder.finish()
-    }
-}
+// impl Debug for PartialNTFA {
+//     fn fmt(&self, f: &mut Formatter) -> Result<(),Error> {
+//         let mut builder = f.debug_list();
+//         for (last,ab) in &self.rules {
+//             if ab.len()==0 {panic!("empty entry")}
+//             for (tok,rest) in ab {
+//                 builder.entry(&NTFAline{token:*tok,arglist:rest.iter().copied().map(number_to_string).collect(),fin:number_to_string(*last)});
+//             }
+//         }
+//         builder.finish()
+//     }
+// }
 
 
 
