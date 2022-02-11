@@ -74,13 +74,23 @@ impl NTFABuilder {
         }
     }
     pub fn intersect(&mut self,mut a_start:usize,mut b_start:usize)->(Option<usize>,Option<usize>,Option<usize>) {
-        if b_start<a_start {swap(&mut a_start,&mut b_start)}
+        if let Some(early) = self.intersect_memo.get(&(min(a_start,b_start),max(a_start,b_start))) {
+            return if b_start<a_start {
+                let (x,y,z) = *early;(z,y,x)
+            } else {*early}
+        }
+        let a_start_s = a_start;
+        let b_start_s = b_start;
         struct OuterStack {
             a_start:usize,b_start:usize,
             ai:usize,bi:usize,
             totalaa:Vec<(usize,Vec<usize>)>,
+            deps_ab:Vec<(usize,Vec<usize>)>,
             totalbb:Vec<(usize,Vec<usize>)>,
-            innerstack:Vec<InnerStack>
+            innerstack:Vec<InnerStack>,
+            placeaa:usize,
+            placeab:usize,
+            placebb:usize
         }
         struct InnerStack {
             amt:usize,
@@ -94,61 +104,95 @@ impl NTFABuilder {
             totalab:Vec<Vec<usize>>,
             bp : Vec<Option<usize>>,
             ap : usize,
-            yab : Option<Vec<usize>>
+            yab : Option<Vec<Vec<usize>>>
         }
         let mut outerstack:Vec<OuterStack>=Vec::new();
 
         let mut ai=0;let mut bi=0;
         let mut totalaa = Vec::new();
         let mut totalbb = Vec::new();
+        let mut deps_ab = Vec::new();
 
         let mut innerstack:Vec<InnerStack>=Vec::new();
 
+        let mut placeaa = self.get_placeholder();
+        let mut placeab = self.get_placeholder();
+        let mut placebb = self.get_placeholder();
+        
         'outerloop: loop {
             let al = &self.paths[a_start];
             let bl = &self.paths[b_start];
+            // println!("from double top");
             'innerloop: while let Some(InnerStack{amt,alim,blim,x,y,abase,bbase,yi,totalab,bp,ap,yab}) = innerstack.last_mut() {
                 let abase=*abase;let bbase=*bbase;let amt=*amt;let alim=*alim;let blim=*blim;
                 let fl=al[abase].1.len();
+                // println!("from top ");
                 loop {
-                    if let Some(bps) = if *x==abase {Some(&bl[bbase+*y].1[amt])} else {bp[*yi].as_ref()} {
-                        let mut rw=if amt+1<fl {
-                            if let Some(y)=yab {y.clone()} else {
+                    // println!("reached point: amt:{},y:{},yi:{}, bplen:{}, bllen:{} ",amt,bbase+*y,*yi,bp.len(),bl.len());
+                    if let Some(bps) = if *x==0 {Some(&bl[bbase+*y].1[amt])} else {bp[*yi].as_ref()} {
+                        let emptyr;
+                        let rw=if amt+1<fl {
+                            if let Some(y)=yab {y} else {
+                                // println!("whoa {} ({},{},{}) ({},{},{}) {:?} {:?}",amt,abase,x,alim,bbase,y,blim,al,bl);
                                 let x=*x;let y=*y;let yi=*yi;
+                                // println!("pushing inner: y:{},bplen:{}, proofok:{:?}",y,bp.len(),bp[y]);
                                 innerstack.push(InnerStack {
                                     yab:None,
                                     bp:Vec::new(),
-                                    ap:al[x].1[amt+1].clone(),
+                                    ap:al[abase+x].1[amt+1].clone(),
                                     totalab:Vec::new(),
-                                    x:x,y:y,yi:yi,abase:x,bbase:x,amt:amt+1,
+                                    x:x,y:y,yi:yi,abase:x,bbase:y,amt:amt+1,
                                     alim:al[abase+x..].iter().take(alim-abase).position(|(_,v)|v[amt] != al[abase+x].1[amt]).unwrap_or(alim),
                                     blim:bl[bbase+y..].iter().take(blim-bbase).position(|(_,v)|v[amt] != bl[bbase+y].1[amt]).unwrap_or(blim)
                                 });
+                                // println!("from innerloop continue A!");
                                 continue 'innerloop;
                             }
-                        } else {Vec::new()};
-                        // let mut rw = if let Some(z)=rw {z} else {continue 'innerloop;};
+                        } else {emptyr = vec![Vec::new()];&emptyr};
                         let (xaa,xab,xbb) : (Option<usize>,Option<usize>,Option<usize>) = {
                             if *ap==*bps {(None,Some(*ap),None)}
+                            else if *ap==0  {(Some(0),Some(*bps),None)}
+                            else if *bps==0 {(None,Some(*ap),Some(0))}
                             else {
-                                match self.intersect_memo.entry((min(*ap,*bps),max(*ap,*bps))) {
-                                    Occupied(z)=>{*z.get()}
-                                    Vacant(z)=>{
-                                        
+                                let ap=*ap;let bps=*bps;
+                                let key = (min(ap,bps),max(ap,bps));
+                                match self.intersect_memo.entry(key) {
+                                    Occupied(z)=>{
+                                        if bps<ap {
+                                            let (x,y,z) = *z.get();(z,y,x)
+                                        } else {*z.get()}
+                                    }
+                                    Vacant(_)=>{
                                         outerstack.push(OuterStack{
                                             a_start,b_start,
                                             ai,bi,
-                                            totalaa:take(&mut totalaa),totalbb:take(&mut totalbb),
-                                            innerstack:take(&mut innerstack)
+                                            totalaa:take(&mut totalaa),totalbb:take(&mut totalbb),deps_ab:take(&mut deps_ab),
+                                            innerstack:take(&mut innerstack),
+                                            placeaa,placeab,placebb
                                         });
+                                        placeaa = self.get_placeholder();
+                                        placeab = self.get_placeholder();
+                                        placebb = self.get_placeholder();
+                                        if bps<ap {
+                                            self.intersect_memo.insert(key,(Some(placebb),Some(placeab),Some(placeaa)));
+                                        } else {
+                                            self.intersect_memo.insert(key,(Some(placeaa),Some(placeab),Some(placebb)));
+                                        }
+                                        // println!("from outerloop continue A!");
                                         continue 'outerloop;
                                     }
                                 }
                             }
                         };
 
-                        if let Some(z) = xab {rw.insert(0,z);totalab.push(rw);}
-                        if *x==abase {bp.push(xbb);} else {bp[*yi]=xbb;}
+                        if let Some(z) = xab {
+                            for rz in rw.iter() {
+                                let mut we = rz.clone();
+                                we.insert(0,z);
+                                totalab.push(we);
+                            }
+                        }
+                        if *x==0 {bp.push(xbb);} else {bp[*yi]=xbb;}
                         *ap=match xaa {Some(z)=>z,None=>{
                             let ox=&al[abase+*x].1[amt];*x+=1;
                             while *x<alim && al[abase+*x].1[amt]!=*ox {*x+=1;}
@@ -168,6 +212,7 @@ impl NTFABuilder {
                         *ap=al[abase+*x].1[amt].clone();
                         *y=bbase;*yi=0;
                     }
+                    // println!("from bottom!");
                 }
                 let mut y = bbase;
                 let mut yi = 0;
@@ -181,9 +226,18 @@ impl NTFABuilder {
                     }
                     yi+=1
                 }
-                
-                println!("finishing a thing!");
-                innerstack.pop();
+                // println!("reached end");
+                let ff = innerstack.pop().unwrap();
+                match innerstack.last_mut() {
+                    Some(o)=>{o.yab = Some(ff.totalab);}
+                    None=>{
+                        let f=al[ai].0;
+                        for j in ff.totalab {deps_ab.push((f,j));}
+                        ai+=ff.alim;
+                        bi+=ff.blim;
+                        break;
+                    }
+                }
             }
             // let mut int_anb=Vec::new();
             // let mut int_ab=Vec::new();
@@ -196,8 +250,8 @@ impl NTFABuilder {
                     let blim=bl[bi..].iter().position(|(f2,_)|*f2 != f).unwrap_or(bl.len()-bi);
                     innerstack.push(InnerStack{
                         amt:0,alim,blim,
-                        x:ai,
-                        y:bi,
+                        x:0,
+                        y:0,
                         abase:ai,
                         bbase:bi,
                         yi:0,
@@ -206,23 +260,53 @@ impl NTFABuilder {
                         ap:al[ai].1[0].clone(),
                         yab:None,
                     });
+                    // println!("from outerloop continue B!");
                     continue 'outerloop;
-
-                    println!("make sure to simplify out some of these clones if alim,blim are singular. Simplify everytihing if alim,blim are singular.");
-                    
-                    ai+=alim;
-                    bi+=blim;
                 }
             }
-            println!("do mergey simplify of everything");
+
+    //                 let ff = stack.pop().unwrap();
+
+            
+
+            // panic!("do mergey simplify of everything");
+
+            // let Some(bps) = if *x==0 {Some(&bl[bbase+*y].1[amt])} else {bp[*yi].as_ref()}
+
+
+
+            let rpvaa = if totalaa.len()==0 {None} else {Some(self.insert_into_placeholder(totalaa,placeaa))};
+            let rpvab = if deps_ab.len()==0 {None} else {Some(self.insert_into_placeholder(deps_ab,placeab))};
+            let rpvbb = if totalbb.len()==0 {None} else {Some(self.insert_into_placeholder(totalbb,placebb))};
             if let Some(o) = outerstack.pop() {
                 a_start=o.a_start;b_start=o.b_start;
                 ai=o.ai;bi=o.bi;
                 totalaa=o.totalaa;
+                deps_ab=o.deps_ab;
                 totalbb=o.totalbb;
                 innerstack=o.innerstack;
+                placeaa=o.placeaa;
+                placeab=o.placeab;
+                placebb=o.placebb;
+                if rpvaa != Some(placeaa) || rpvab != Some(placeab) || rpvbb != Some(placebb) {
+                    let j = innerstack.last_mut().unwrap();
+                    let r_key_a = if j.x==0 {self.paths[b_start][j.bbase+j.y].1[j.amt]} else {j.bp[j.yi].unwrap()};
+                    let r_key_b = j.ap;
+                    if r_key_a<r_key_b {
+                        self.intersect_memo.insert((r_key_a,r_key_b),(rpvaa,rpvab,rpvbb));//harmlessly replace old value
+                    } else {
+                        self.intersect_memo.insert((r_key_b,r_key_a),(rpvbb,rpvab,rpvaa));//harmlessly replace old value
+                    }
+                }
             } else {
-                panic!()
+                if rpvaa != Some(placeaa) || rpvab != Some(placeab) || rpvbb != Some(placebb) {
+                    if a_start_s<b_start_s {
+                        self.intersect_memo.insert((a_start_s,b_start_s),(rpvaa,rpvab,rpvbb));//harmlessly replace old value
+                    } else {
+                        self.intersect_memo.insert((b_start_s,a_start_s),(rpvbb,rpvab,rpvaa));//harmlessly replace old value
+                    }
+                }
+                return (rpvaa,rpvab,rpvbb);
             }
         }
     }
@@ -331,7 +415,8 @@ impl NTFABuilder {
     }
 
     fn insert_into_placeholder(&mut self,mut deps:Vec<(usize,Vec<usize>)>,i:usize)->usize {
-        // NTFABuilder::small_simplification(&mut deps);
+        deps.sort_unstable_by(|a, b| b.cmp(a));
+        deps.dedup();
         match self.revhash.entry(deps) {
             Occupied(x)=>*x.get(),//release i back to the cluster...
             Vacant(x)=>{
@@ -816,7 +901,8 @@ impl PartialNTFA {
                         let mut y = x+1;
                         while y<b {
                             if (0..l).all(|a2|a2==amt || deps[a+x].1[a2]==deps[a+y].1[a2]) {
-                                let depr = take(&mut deps.remove(a+y).1[l]);
+                                // println!("{:?} {} {}",deps,a+y,l);
+                                let depr = take(&mut deps.remove(a+y).1[amt]);
                                 deps[a+x].1[amt] = dedup_merge(take(&mut deps[a+x].1[amt]),depr);
                                 if deps[a+x].1[amt][0]==0 {deps[a+x].1[amt]=vec![0]}
                                 b-=1;

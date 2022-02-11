@@ -51,8 +51,7 @@ fn main() {
     println!("it's possible that you miss sharing opportunities because the revhash only contains the unsimplified versions UNTIL after construction is over.");
     println!("");
     println!("");
-    println!("how can you trim pure loops?");
-    println!("getmergedvl has common code");
+    println!("simplify singular alim, blim");
     println!("");
     println!("");
 
@@ -68,7 +67,7 @@ fn main() {
                 else {Some(p)}
             }).collect();
     paths.sort();
-    for fullpath in paths.into_iter().take(7) {
+    for fullpath in paths.into_iter().take(1) {
         let (builder,spec,(input_type,output_type)) = interpret_file(fullpath);
         synthesize(builder,spec,input_type,output_type);
     }
