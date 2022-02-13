@@ -10,6 +10,8 @@ use ProcValue::{*};
 // use ProcType::{*};
 // use RefineLiteral::{*};
 use crate::debug::{*};
+use crate::ntfa::{*};
+
 
 fn extract_subexpressions(
     builder:&ExpressionBuilder,
@@ -56,7 +58,7 @@ pub fn synthesize(
     input_type:usize,
     output_type:usize
 ) {
-    let mut ntfabuilder = NTFABuilder::new();
+    let mut ntfabuilder = NTFABuilder::new(&mut exprbuilder);
     let confirmer = spec.getconfirmer();
     let mut heap = BinaryHeap::new();
     heap.push(QueueElem{ item:spec, priority:0 });
@@ -80,7 +82,7 @@ pub fn synthesize(
                     &mut accepting_states,
                     &mut graph_buffer,
                     &mut subexpressions,
-                    7
+                    8
                 ) {
                     Some(z)=>z,
                     None=>{
@@ -90,7 +92,29 @@ pub fn synthesize(
                         continue 'specloop
                     }
                 };
+            // for (newntfa,newmapping) in vec![{
+            //     let mut res = PartialNTFA::new();
+            //     res.add_rule(0,vec![],1);
+            //     res.add_rule(1,vec![],1);
+
+            //     res.add_rule(9,vec![1,0,1],3);
+            //     println!("builing! {:?}",res);
+            //     // res.add_rule(9,vec![2,2,0],3);
+            //     res
+            // }.convert(&mut ntfabuilder,&{let mut h = HashSet::new();h.insert(3);h}).unwrap(),{
+            //     let mut res = PartialNTFA::new();
+            //     res.add_rule(0,vec![],1);
+            //     res.add_rule(1,vec![],2);
+
+            //     // res.add_rule(9,vec![1,0,1],3);
+            //     res.add_rule(9,vec![2,2,0],3);
+            //     println!("builing! {:?}",res);
+            //     res
+            // }.convert(&mut ntfabuilder,&{let mut h = HashSet::new();h.insert(3);h}).unwrap(),] {
+
+
                 println!("built!");
+                ntfabuilder.output_tree(newntfa);
                 tables.push(newmapping);
                 opntfa = match opntfa {
                     None=>Some(newntfa),
@@ -98,7 +122,7 @@ pub fn synthesize(
                         println!("intersecting...");
                         if let (_,Some(intstate),_) = ntfabuilder.intersect(newntfa,oldstate) {
                             println!("outputting!");
-                            // ntfabuilder.output_tree(intstate);
+                            ntfabuilder.output_tree(intstate);
                             // ntfabuilder.deplete_minification_queue();
                             // ntfabuilder.forget_minification_queue();
                             Some(intstate)

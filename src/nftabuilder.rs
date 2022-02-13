@@ -271,6 +271,47 @@ fn compare_strictlysmaller(
 }
 
 impl NTFABuilder {
+    pub fn new(builder:&mut ExpressionBuilder)->Self {
+        //state space:
+        // 0:uneval
+        // 1:()
+        //function space:
+        // 0:unit        (0)
+        // 1:input       (0)
+        // 2:pair        (2)
+        // 3:fst         (1)
+        // 4:snd         (1)
+        // 5:inl         (1)
+        // 6:inr         (1)
+        // 7:unl         (1)
+        // 8:unr         (1)
+        // 9:switch      (3)
+        // 10:recursion  (1)
+        // 11-onwards: free space!
+        NTFABuilder {
+            paths:vec![
+                (0..builder.get_f_count()).rev().map(|ff|(1+ff,vec![0;builder.get_required_function_args(ff).unwrap()]))
+                .chain(vec![
+                    (10,vec![0]),
+                    (9,vec![0,0,0]),
+                    (8,vec![0]),
+                    (7,vec![0]),
+                    (6,vec![0]),
+                    (5,vec![0]),
+                    (4,vec![0]),
+                    (3,vec![0]),
+                    (2,vec![0,0]),
+                    (1,vec![]),
+                    (0,vec![]),
+                ]).collect()
+            ],//inner vec must be sorted
+            revhash:HashMap::new(),
+            intersect_memo:HashMap::new(),
+            rename_memo:HashMap::new(),
+            subset_memo:HashMap::new(),
+            // minification_queue:Vec::new(),
+        }
+    }
     pub fn build_ntfa(
         &mut self,
         builder:&mut ExpressionBuilder,
@@ -297,43 +338,12 @@ impl NTFABuilder {
         fn new_stack_elem(
             input:usize,
             input_type:usize,
-            outputs:&HashMap<usize,BaseLiteral>,
-            builder:&mut ExpressionBuilder
+            outputs:&HashMap<usize,BaseLiteral>
         )->StackElem {
             let mut queue = BinaryHeap::new();
             let mut res = PartialNTFA::new();
-            //state space:
-            // 0:uneval
-            // 1:()
-            //function space:
-            // 0:unit        (0)
-            // 1:input       (0)
-            // 2:pair        (2)
-            // 3:fst         (1)
-            // 4:snd         (1)
-            // 5:inl         (1)
-            // 6:inr         (1)
-            // 7:unl         (1)
-            // 8:unr         (1)
-            // 9:switch      (3)
-            // 10:recursion  (1)
-            // 11-onwards: free space!
             res.add_rule(0,Vec::new(),1);
             res.add_rule(1,Vec::new(),input);
-            res.add_rule(0,Vec::new(),0);
-            res.add_rule(1,Vec::new(),0);
-            res.add_rule(2,vec![0,0],0);
-            res.add_rule(3,vec![0],0);
-            res.add_rule(4,vec![0],0);
-            res.add_rule(5,vec![0],0);
-            res.add_rule(6,vec![0],0);
-            res.add_rule(7,vec![0],0);
-            res.add_rule(8,vec![0],0);
-            res.add_rule(9,vec![0,0,0],0);
-            res.add_rule(10,vec![0],0);
-            for ff in 0..builder.get_f_count() {
-                res.add_rule(1+ff,vec![0;builder.get_required_function_args(ff).unwrap()],0);
-            }
             queue.push(QueueElem{item:(1,vec![0]),priority:1});
             queue.push(QueueElem{item:(input,vec![input_type]),priority:1});
             StackElem{
@@ -347,8 +357,7 @@ impl NTFABuilder {
         let mut stack : Vec<StackElem> = vec![new_stack_elem(
             input,
             input_type,
-            outputs,
-            builder
+            outputs
         )];
         'stackloop: while let Some(StackElem{
             input,
@@ -380,8 +389,7 @@ impl NTFABuilder {
                             stack.push(new_stack_elem(
                                 x,
                                 input_type,
-                                outputs,
-                                builder
+                                outputs
                             ));
                             continue 'stackloop;
                         }
@@ -517,7 +525,7 @@ impl NTFABuilder {
                         }
                     }
                 }
-                if !processed.contains_key(&x) {
+                if x!=1 && !processed.contains_key(&x) {
                     processed.insert(x,size);
                     for (y,ysize) in processed.iter() {
                         if *ysize+size>=k {continue;}

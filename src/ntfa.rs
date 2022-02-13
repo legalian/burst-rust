@@ -6,12 +6,12 @@ use std::collections::HashSet;
 use std::collections::BinaryHeap;
 use std::collections::hash_map::Entry::*;
 use std::rc::Rc;
-use std::mem::{take,replace,swap};
+use std::mem::{take};//,replace,swap};
 use std::iter::{*};
 
 use crate::dsl::{*};
 use crate::nftabuilder::{*};
-// use crate::debug::{*};
+use crate::debug::{*};
 // use crate::queue::{*};
 use std::cmp::{min,max};
 use std::vec::IntoIter;
@@ -55,32 +55,28 @@ fn dedup_merge<T:Ord>(a:Vec<T>,b:Vec<T>) -> Vec<T> {
 
 pub struct NTFABuilder {
     pub paths:Vec<Vec<(usize,Vec<usize>)>>,//inner vec must be sorted
-    revhash:HashMap<Vec<(usize,Vec<usize>)>,usize>,
-    intersect_memo:HashMap<(usize,usize),(Option<usize>,Option<usize>,Option<usize>)>,//left side of key is less than right side
-    rename_memo:HashMap<(usize,Vec<usize>),usize>,
-    subset_memo:HashMap<(usize,usize),bool>,
+    pub revhash:HashMap<Vec<(usize,Vec<usize>)>,usize>,
+    pub intersect_memo:HashMap<(usize,usize),(Option<usize>,Option<usize>,Option<usize>)>,//left side of key is less than right side
+    pub rename_memo:HashMap<(usize,Vec<usize>),usize>,
+    pub subset_memo:HashMap<(usize,usize),bool>,
     // minification_queue:Vec<usize>,
 }
 
 impl NTFABuilder {
-    pub fn new()->Self {
-        NTFABuilder {
-            paths:vec![vec![]],//inner vec must be sorted
-            revhash:HashMap::new(),
-            intersect_memo:HashMap::new(),
-            rename_memo:HashMap::new(),
-            subset_memo:HashMap::new(),
-            // minification_queue:Vec::new(),
-        }
-    }
     pub fn intersect(&mut self,mut a_start:usize,mut b_start:usize)->(Option<usize>,Option<usize>,Option<usize>) {
-        if let Some(early) = self.intersect_memo.get(&(min(a_start,b_start),max(a_start,b_start))) {
+        println!("ENTERING INTERSECT: {} {}",a_start,b_start);
+        if a_start==b_start {return (None,Some(0),None)}
+        if a_start==0 {return (Some(0),Some(a_start),None)}
+        if b_start==0 {return (None,Some(b_start),Some(0))}
+        let key = (min(a_start,b_start),max(a_start,b_start));
+        if let Some(early) = self.intersect_memo.get(&key) {
             return if b_start<a_start {
                 let (x,y,z) = *early;(z,y,x)
             } else {*early}
         }
         let a_start_s = a_start;
         let b_start_s = b_start;
+        #[derive(Debug)]
         struct OuterStack {
             a_start:usize,b_start:usize,
             ai:usize,bi:usize,
@@ -92,6 +88,7 @@ impl NTFABuilder {
             placeab:usize,
             placebb:usize
         }
+        #[derive(Debug)]
         struct InnerStack {
             amt:usize,
             alim:usize,
@@ -106,6 +103,7 @@ impl NTFABuilder {
             ap : usize,
             yab : Option<Vec<Vec<usize>>>
         }
+        let emptyr = vec![Vec::new()];
         let mut outerstack:Vec<OuterStack>=Vec::new();
 
         let mut ai=0;let mut bi=0;
@@ -118,43 +116,66 @@ impl NTFABuilder {
         let mut placeaa = self.get_placeholder();
         let mut placeab = self.get_placeholder();
         let mut placebb = self.get_placeholder();
+        if b_start<a_start {
+            self.intersect_memo.insert(key,(Some(placebb),Some(placeab),Some(placeaa)));
+        } else {
+            self.intersect_memo.insert(key,(Some(placeaa),Some(placeab),Some(placebb)));
+        }
         
         'outerloop: loop {
             let al = &self.paths[a_start];
             let bl = &self.paths[b_start];
             // println!("from double top");
+            // println!("begin outerloop: {:#?} astart:{} bstart:{} {:?}",outerstack,a_start,b_start,innerstack);
+            // println!("-=-=-=-=-=-=-=-");
             'innerloop: while let Some(InnerStack{amt,alim,blim,x,y,abase,bbase,yi,totalab,bp,ap,yab}) = innerstack.last_mut() {
+                // println!("innerloop: f:{},x:{},y:{}, amt:{}, yab:{:?} ",al[*abase+*x].0,*abase+*x,*bbase+*y,amt,yab);
+
+                // if *amt != TODOREMOVE-1 {
+                //     panic!()
+                // }
                 let abase=*abase;let bbase=*bbase;let amt=*amt;let alim=*alim;let blim=*blim;
                 let fl=al[abase].1.len();
+                if Some(fl)!=debug_expectedlen(al[abase].0) {panic!()}
                 // println!("from top ");
                 loop {
-                    // println!("reached point: amt:{},y:{},yi:{}, bplen:{}, bllen:{} ",amt,bbase+*y,*yi,bp.len(),bl.len());
-                    if let Some(bps) = if *x==0 {Some(&bl[bbase+*y].1[amt])} else {bp[*yi].as_ref()} {
-                        let emptyr;
+                    // println!("reached point: *x:{} amt:{},y:{},yi:{}, bplen:{}, bllen:{}, compolen:{}",*x,amt,bbase+*y,*yi,bp.len(),bl.len(),bl[bbase+*y].1.len());
+                    if let Some(bps) = if bp.len()==*yi {Some(bl[bbase+*y].1[amt])} else {bp[*yi]} {
                         let rw=if amt+1<fl {
                             if let Some(y)=yab {y} else {
                                 // println!("whoa {} ({},{},{}) ({},{},{}) {:?} {:?}",amt,abase,x,alim,bbase,y,blim,al,bl);
-                                let x=*x;let y=*y;let yi=*yi;
-                                // println!("pushing inner: y:{},bplen:{}, proofok:{:?}",y,bp.len(),bp[y]);
+                                let x=*x;let y=*y;
+                                // if a_start==a_start_s && b_start==b_start_s {println!("pushing inner: x:{} y:{}, amt:{}",abase+x,bbase+y,amt+1);}
                                 innerstack.push(InnerStack {
                                     yab:None,
                                     bp:Vec::new(),
                                     ap:al[abase+x].1[amt+1].clone(),
                                     totalab:Vec::new(),
-                                    x:x,y:y,yi:yi,abase:x,bbase:y,amt:amt+1,
-                                    alim:al[abase+x..].iter().take(alim-abase).position(|(_,v)|v[amt] != al[abase+x].1[amt]).unwrap_or(alim),
-                                    blim:bl[bbase+y..].iter().take(blim-bbase).position(|(_,v)|v[amt] != bl[bbase+y].1[amt]).unwrap_or(blim)
+                                    x:0,y:0,yi:0,abase:abase+x,bbase:bbase+y,amt:amt+1,
+                                    alim:al[abase+x..].iter().take(alim).position(|(_,v)|v[amt] != al[abase+x].1[amt]).unwrap_or(alim),
+                                    blim:bl[bbase+y..].iter().take(blim).position(|(_,v)|v[amt] != bl[bbase+y].1[amt]).unwrap_or(blim)
                                 });
                                 // println!("from innerloop continue A!");
                                 continue 'innerloop;
                             }
-                        } else {emptyr = vec![Vec::new()];&emptyr};
+                        } else {&emptyr};
+
+                        // for rz in rw.iter() {
+                        //     if fl!=amt+rz.len()+1 {
+                        //         let x=*x;let y=*y;let rzl=rz.len();
+                        //         println!("{:#?}",innerstack);
+                        //         println!("{:?}",deps_ab);
+                        //         println!(" {:?} {} {}\n {:?} {} {}",al,abase+x,ai,bl,bbase+y,bi);
+                        //         panic!("{}: {} {} {} ",al[abase].0,fl,amt,rzl)
+                        //     }
+                        // }
+
                         let (xaa,xab,xbb) : (Option<usize>,Option<usize>,Option<usize>) = {
-                            if *ap==*bps {(None,Some(*ap),None)}
-                            else if *ap==0  {(Some(0),Some(*bps),None)}
-                            else if *bps==0 {(None,Some(*ap),Some(0))}
+                            if *ap==bps {(None,Some(*ap),None)}
+                            else if *ap==0  {(Some(0),Some(bps),None)}
+                            else if bps==0 {(None,Some(*ap),Some(0))}
                             else {
-                                let ap=*ap;let bps=*bps;
+                                let ap=*ap;
                                 let key = (min(ap,bps),max(ap,bps));
                                 match self.intersect_memo.entry(key) {
                                     Occupied(z)=>{
@@ -163,6 +184,9 @@ impl NTFABuilder {
                                         } else {*z.get()}
                                     }
                                     Vacant(_)=>{
+
+            // println!("{}^{} = ({:?},{:?},{:?}), ad={:?}, bd={:?}, center = {:?}",a_start,b_start,rpvaa,rpvab,rpvbb,self.paths[a_start],self.paths[b_start],deps_ab);
+            
                                         outerstack.push(OuterStack{
                                             a_start,b_start,
                                             ai,bi,
@@ -170,14 +194,19 @@ impl NTFABuilder {
                                             innerstack:take(&mut innerstack),
                                             placeaa,placeab,placebb
                                         });
+                                        ai=0;bi=0;
+                                        a_start=ap;
+                                        b_start=bps;
                                         placeaa = self.get_placeholder();
                                         placeab = self.get_placeholder();
                                         placebb = self.get_placeholder();
+                                        // println!("intersected: {:?} {:?} {:?}",(placeaa,placeab,placebb));
                                         if bps<ap {
                                             self.intersect_memo.insert(key,(Some(placebb),Some(placeab),Some(placeaa)));
                                         } else {
                                             self.intersect_memo.insert(key,(Some(placeaa),Some(placeab),Some(placebb)));
                                         }
+                                        println!("pushing to outer stack new goal: {}^{} {:?} {:?}",a_start,b_start,self.paths[a_start],self.paths[b_start]);
                                         // println!("from outerloop continue A!");
                                         continue 'outerloop;
                                     }
@@ -189,50 +218,107 @@ impl NTFABuilder {
                             for rz in rw.iter() {
                                 let mut we = rz.clone();
                                 we.insert(0,z);
+                                // println!(" {} {} {} ",fl,amt,we.len());
+                                if fl!=amt+we.len() {panic!(" {} {} {} ",fl,amt,we.len())}
                                 totalab.push(we);
                             }
                         }
-                        if *x==0 {bp.push(xbb);} else {bp[*yi]=xbb;}
+                        if bp.len()==*yi {bp.push(xbb);}
+                        else {bp[*yi]=xbb;}
                         *ap=match xaa {Some(z)=>z,None=>{
+                            // if a_start==a_start_s && b_start==b_start_s {println!("early abort: xaa is none. ap: {}, bps: {}, {},{} amt:{} ADEPS:{:?} BDEPS:{:?}",*ap,bps,abase+*x,bbase+*y,amt,self.paths[a_start],self.paths[b_start]);}
                             let ox=&al[abase+*x].1[amt];*x+=1;
-                            while *x<alim && al[abase+*x].1[amt]!=*ox {*x+=1;}
-                            if *x>=alim {break;}
+                            while *x<alim && al[abase+*x].1[amt]==*ox {*x+=1;}
+                            if *x>=alim {
+                                // if a_start==a_start_s && b_start==b_start_s {println!("exiting (1) amt:{}",amt);}
+                                break;
+                            }
                             *ap=al[abase+*x].1[amt].clone();
                             *y=0;*yi=0;
+                            // println!("from semibottom");
                             continue;
                         }};
                     }
+                    // else {
+                    //     if a_start==a_start_s && b_start==b_start_s {println!("skipped loop: bps is none");}
+                    // }
+                    let OLDY = bbase+*y;
                     let oy=&bl[bbase+*y].1[amt];*y+=1;
-                    while *y<blim && bl[bbase+*y].1[amt]!=*oy {*y+=1;}
+                    while *y<blim && bl[bbase+*y].1[amt]==*oy {*y+=1;}
                     *yi+=1;
+                    // if *x>
+                    // println!("advancing yi;")
+                    // if a_start==a_start_s && b_start==b_start_s {println!("advancing B {} to {}",OLDY,bbase+*y);}
                     if *y>=blim {
+                        let OLDX = abase+*x;
+
                         let ox=&al[abase+*x].1[amt];totalaa.push({let mut h=al[abase+*x].clone();h.1[amt]=ap.clone();h});*x+=1;
-                        while *x<alim && al[abase+*x].1[amt]!=*ox {totalaa.push({let mut h=al[abase+*x].clone();h.1[amt]=ap.clone();h});*x+=1;}
-                        if *x>=alim {break;}
+                        while *x<alim && al[abase+*x].1[amt]==*ox {totalaa.push({let mut h=al[abase+*x].clone();h.1[amt]=ap.clone();h});*x+=1;}
+                        if a_start==a_start_s && b_start==b_start_s {println!("advancing A {} to {}, resetting B",OLDX,abase+*x);}
+                        if *x>=alim {
+                            if a_start==a_start_s && b_start==b_start_s {println!("exiting (2) amt:{}",amt);}
+                            break;
+                        }
                         *ap=al[abase+*x].1[amt].clone();
-                        *y=bbase;*yi=0;
+                        *y=0;*yi=0;
                     }
                     // println!("from bottom!");
                 }
                 let mut y = bbase;
                 let mut yi = 0;
                 while y<blim {
+                    if yi==bp.len() {
+                        totalbb.push(bl[bbase+y].clone());
+                        y+=1;
+                        continue;
+                    }
                     let oy=&bl[bbase+y].1[amt];
                     if let Some(z)=&bp[yi] {totalbb.push({let mut h=bl[bbase+y].clone();h.1[amt]=z.clone();h});}
                     y+=1;
-                    while y<blim && bl[bbase+y].1[amt]!=*oy {
+                    while y<blim && bl[bbase+y].1[amt]==*oy {
                         if let Some(z)=&bp[yi] {totalbb.push({let mut h=bl[bbase+y].clone();h.1[amt]=z.clone();h});}
                         y+=1;
                     }
                     yi+=1
                 }
                 // println!("reached end");
+                // for i in 0..innerstack.len()-1 {
+                //     if innerstack[i].amt+1!=innerstack[i+1].amt {
+                //         panic!();
+                //     }
+                // }
+                // for st in innerstack.iter() {
+                //     for rz in st.totalab.iter() {
+                //         if fl!=st.amt+rz.len() {panic!(" {} {} {} ",fl,amt,rz.len())}
+                //     }
+                // }
                 let ff = innerstack.pop().unwrap();
                 match innerstack.last_mut() {
-                    Some(o)=>{o.yab = Some(ff.totalab);}
+                    Some(o)=>{
+                        // if ff.totalab.len()>0 && fl!=ff.totalab[0].len()+o.amt+1 {
+                        //     panic!("trouble");
+                        // }
+                        // if o.yab.is_some() {
+                        //     panic!()
+                        // }
+                        o.yab = Some(ff.totalab);
+                        // println!("assign to yab: from {:?}",innerstack);
+                    }
                     None=>{
+                        // if ai!=abase || bi!=bbase {
+                        //     panic!();
+                        // }
                         let f=al[ai].0;
-                        for j in ff.totalab {deps_ab.push((f,j));}
+                        for j in ff.totalab {
+
+                            // if debug_expectedlen(f)!=Some(j.len()) {
+                            //     panic!(
+                            //         "addign: {},{:?}",f,j
+                            //     );
+                            // }
+
+                            deps_ab.push((f,j));
+                        }
                         ai+=ff.alim;
                         bi+=ff.blim;
                         break;
@@ -242,26 +328,33 @@ impl NTFABuilder {
             // let mut int_anb=Vec::new();
             // let mut int_ab=Vec::new();
             while ai<al.len() && bi<bl.len() {
-                if al[ai].0<bl[bi].0 {totalaa.push(al[ai].clone());ai+=1;}
-                else if al[ai].0>bl[bi].0 {totalbb.push(bl[bi].clone());bi+=1;}
+                if al[ai].0>bl[bi].0 {totalaa.push(al[ai].clone());ai+=1;}
+                else if al[ai].0<bl[bi].0 {totalbb.push(bl[bi].clone());bi+=1;}
                 else {
                     let f=al[ai].0;
-                    let alim=al[ai..].iter().position(|(f2,_)|*f2 != f).unwrap_or(al.len()-ai);
-                    let blim=bl[bi..].iter().position(|(f2,_)|*f2 != f).unwrap_or(bl.len()-bi);
-                    innerstack.push(InnerStack{
-                        amt:0,alim,blim,
-                        x:0,
-                        y:0,
-                        abase:ai,
-                        bbase:bi,
-                        yi:0,
-                        totalab:Vec::new(),
-                        bp:Vec::new(),
-                        ap:al[ai].1[0].clone(),
-                        yab:None,
-                    });
-                    // println!("from outerloop continue B!");
-                    continue 'outerloop;
+                    if al[ai].1.len()==0 {
+                        deps_ab.push((f,Vec::new()));
+                        ai+=1;
+                        bi+=1;
+                    } else {
+                        let alim=al[ai..].iter().position(|(f2,_)|*f2 != f).unwrap_or(al.len()-ai);
+                        let blim=bl[bi..].iter().position(|(f2,_)|*f2 != f).unwrap_or(bl.len()-bi);
+                        // println!("addressing: {} {} {} {:?} {:?}",f,alim,blim,al,bl);
+                        innerstack.push(InnerStack{
+                            amt:0,alim,blim,
+                            x:0,
+                            y:0,
+                            abase:ai,
+                            bbase:bi,
+                            yi:0,
+                            totalab:Vec::new(),
+                            bp:Vec::new(),
+                            ap:al[ai].1[0].clone(),
+                            yab:None,
+                        });
+                        // println!("from outerloop continue B!");
+                        continue 'outerloop;
+                    }
                 }
             }
 
@@ -276,8 +369,11 @@ impl NTFABuilder {
 
 
             let rpvaa = if totalaa.len()==0 {None} else {Some(self.insert_into_placeholder(totalaa,placeaa))};
-            let rpvab = if deps_ab.len()==0 {None} else {Some(self.insert_into_placeholder(deps_ab,placeab))};
+            let rpvab = if deps_ab.len()==0 {None} else {Some(self.insert_into_placeholder(deps_ab.clone(),placeab))};
             let rpvbb = if totalbb.len()==0 {None} else {Some(self.insert_into_placeholder(totalbb,placebb))};
+
+            println!("{}^{} = ({:?},{:?},{:?}), ad={:?}, bd={:?}, center = {:?}",a_start,b_start,rpvaa,rpvab,rpvbb,self.paths[a_start],self.paths[b_start],deps_ab);
+            
             if let Some(o) = outerstack.pop() {
                 a_start=o.a_start;b_start=o.b_start;
                 ai=o.ai;bi=o.bi;
@@ -290,7 +386,13 @@ impl NTFABuilder {
                 placebb=o.placebb;
                 if rpvaa != Some(placeaa) || rpvab != Some(placeab) || rpvbb != Some(placebb) {
                     let j = innerstack.last_mut().unwrap();
-                    let r_key_a = if j.x==0 {self.paths[b_start][j.bbase+j.y].1[j.amt]} else {j.bp[j.yi].unwrap()};
+                    // println!("");
+                    // println!("WHATEVER 1 {:?}",self.paths[b_start]);
+                    // println!("WHATEVER 2 {:?}",self.paths[b_start][j.bbase+j.y]);
+                    // println!("WHATEVER 3 {:?}",self.paths[b_start][j.bbase+j.y].1[j.amt]);
+                    // println!("WHATEVER 4 {:?}",self.paths[b_start][j.bbase+j.y].1[j.amt]);
+
+                    let r_key_a = if j.yi==j.bp.len() {self.paths[b_start][j.bbase+j.y].1[j.amt]} else {j.bp[j.yi].unwrap()};
                     let r_key_b = j.ap;
                     if r_key_a<r_key_b {
                         self.intersect_memo.insert((r_key_a,r_key_b),(rpvaa,rpvab,rpvbb));//harmlessly replace old value
@@ -614,6 +716,7 @@ impl NTFABuilder {
                     if !visited.insert(x) {continue;}
                     let y = &self.paths[x];
                     if let Some((f,_)) = y.iter().find(|(_,x)|x.len()==0) {
+                        // println!("found nullary!");
                         for sol in SolutionStatus::transfix(*f,&vec![],map,builder) {
                             queue.push(SolutionStatusWrap(x,minsize+1,Some(sol)));
                         }
@@ -817,7 +920,7 @@ impl ValueMapper {
 
 #[derive(Default)]
 pub struct PartialNTFA {
-    rules:HashMap<usize,Vec<(usize,Vec<usize>)>>,
+    pub rules:HashMap<usize,Vec<(usize,Vec<usize>)>>,
     occurances:HashMap<usize,HashSet<usize>>,
     maxins:usize,
     vm:ValueMapper
@@ -885,8 +988,9 @@ impl PartialNTFA {
         for s in ind {deps.extend(self.rules.get(&s).into_iter().map(|ii|ii.iter().map(|(f,a)|(*f,a.iter().map(|x|vec![*x]).collect()))).flatten());}
         deps.sort_unstable_by(|a, b| b.cmp(a));
         deps.dedup();
+        // println!("original deps: {:?}",deps);
         let mut a=0;
-        while a<deps.len()-1 {
+        while a+1<deps.len() {
             let f = deps[a].0;
             let l = deps[a].1.len();
             let mut b=1;
@@ -895,7 +999,7 @@ impl PartialNTFA {
                 if a+b>=deps.len() {break;}
             }
             if b != 1 {
-                for amt in 0..l {
+                for amt in (0..l).rev() {
                     let mut x=0;
                     while x<b {
                         let mut y = x+1;
@@ -917,6 +1021,10 @@ impl PartialNTFA {
             a+=b;
         }
         deps.sort_unstable_by(|a, b| b.cmp(a));
+        for (_,v) in deps.iter_mut() {
+            v.reverse();
+        }
+        // println!("deps is now : {:?}",deps);
         deps.into_iter()
     }
     pub fn convert(self,builder:&mut NTFABuilder,accstates:&HashSet<usize>)->Option<(usize,ValueMapper)> {
