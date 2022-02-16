@@ -10,7 +10,7 @@ use ProcValue::{*};
 // use ProcType::{*};
 // use RefineLiteral::{*};
 use crate::debug::{*};
-use crate::ntfa::{*};
+// use crate::ntfa::{*};
 
 
 fn extract_subexpressions(
@@ -62,9 +62,11 @@ pub fn synthesize(
     let confirmer = spec.getconfirmer();
     let mut heap = BinaryHeap::new();
     heap.push(QueueElem{ item:spec, priority:0 });
+    println!("pre-pop!");
     while let Some(QueueElem{ item:mut spec, .. }) = heap.pop() {
+        println!("post-pop!");
         'specloop: while let Some(states) = spec.get_next() {
-            println!("Found one option");
+            // println!("Found one option");
             let mut graph_buffer : HashMap<usize,Option<(usize,ValueMapper)>> = HashMap::new();
             let mut accepting_states : HashMap<usize,HashSet<usize>> = HashMap::new();
             let mut opntfa : Option<usize> = None;
@@ -75,7 +77,7 @@ pub fn synthesize(
             let mut debug_converted = Vec::new();
             let mut debug_intersected = Vec::new();
             for a in order {
-                println!("Evaluating one literal");
+                println!("building...");
                 let (newntfa,newmapping) = match ntfabuilder.build_ntfa(
                     &mut exprbuilder,
                     a,
@@ -84,7 +86,7 @@ pub fn synthesize(
                     &mut accepting_states,
                     &mut graph_buffer,
                     &mut subexpressions,
-                    8
+                    12
                 ) {
                     Some(z)=>z,
                     None=>{
@@ -121,7 +123,7 @@ pub fn synthesize(
                     ty:input_type,
                     expr:&exprbuilder
                 });
-                ntfabuilder.output_tree(newntfa);
+                // ntfabuilder.output_tree(newntfa);
                 tables.push(newmapping);
                 opntfa = match opntfa {
                     None=>Some(newntfa),
@@ -129,8 +131,8 @@ pub fn synthesize(
                         println!("intersecting...");
                         if let Some(intstate) = ntfabuilder.intersect(newntfa,oldstate) {
                             debug_intersected.push(intstate);
-                            println!("outputting!");
-                            ntfabuilder.output_tree(intstate);
+                            println!(" ------- outputting!");
+                            // ntfabuilder.output_tree(intstate);
                             // ntfabuilder.deplete_minification_queue();
                             // ntfabuilder.forget_minification_queue();
                             Some(intstate)
@@ -148,12 +150,12 @@ pub fn synthesize(
             if solution_list.len()>0 {
                 for (solution,solsize,witness) in solution_list {
                     println!("PARTIAL SOLUTION FOUND: {:#?}  {:?} {:?}",EnhancedPrintDsl{dsl:&solution,expr:&exprbuilder},witness,solsize);
-                    for j in debug_converted.iter().copied() {
-                        println!("converted graph accepts? {:?}",ntfabuilder.debug_is_accepting_run(j,&solution,&exprbuilder));
-                    }
-                    for j in debug_intersected.iter().copied() {
-                        println!("intersected graph accepts? {:?}",ntfabuilder.debug_is_accepting_run(j,&solution,&exprbuilder));
-                    }
+                    // for j in debug_converted.iter().copied() {
+                    //     println!("converted graph accepts? {:?}",ntfabuilder.debug_is_accepting_run(j,&solution,&exprbuilder));
+                    // }
+                    // for j in debug_intersected.iter().copied() {
+                    //     println!("intersected graph accepts? {:?}",ntfabuilder.debug_is_accepting_run(j,&solution,&exprbuilder));
+                    // }
                 }
                 return;
                 // let mut yes_side = spec.clone();
@@ -175,6 +177,7 @@ pub fn synthesize(
                 continue 'specloop
             }
         }
+        panic!("empty one???????")
     }
 }
 

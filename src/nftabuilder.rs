@@ -332,8 +332,8 @@ impl NTFABuilder {
             res : PartialNTFA,
             processed : HashMap<usize,usize>,
             processed_rel : HashMap<usize,Vec<(usize,usize)>>,//type:val,size,rstatus
-            queue : BinaryHeap<QueueElem<(usize,Vec<usize>)>>,
-            visited : HashMap<(usize,usize),usize>,
+            queue : BinaryHeap<QueueElem<(usize,Vec<usize>,bool)>>,
+            visited : HashMap<(usize,usize),(usize,bool)>,
             accepting_states : HashSet<usize>
         }
         fn new_stack_elem(
@@ -345,8 +345,8 @@ impl NTFABuilder {
             let mut res = PartialNTFA::new();
             res.add_rule(0,Vec::new(),1);
             res.add_rule(1,Vec::new(),input);
-            queue.push(QueueElem{item:(1,vec![0]),priority:1});
-            queue.push(QueueElem{item:(input,vec![input_type]),priority:1});
+            queue.push(QueueElem{item:(1,vec![0],true),priority:1});
+            queue.push(QueueElem{item:(input,vec![input_type],true),priority:1});
             StackElem{
                 input,
                 output:outputs.get(&input).cloned(),
@@ -372,12 +372,17 @@ impl NTFABuilder {
         }) = stack.last_mut() {
             let input=*input;
             // let output=
-            while let Some(QueueElem{item:(x,mut xtl),priority:size}) = queue.pop() {
+            while let Some(QueueElem{item:(x,mut xtl,fresh),priority:size}) = queue.pop() {
                 if size>=k {break;}
                 xtl.retain(|xt|{
                     match visited.entry((x,*xt)) {
-                        Occupied(_)=>false,
-                        Vacant(y)=>{y.insert(size);true}
+                        Occupied(mut y)=>{
+                            let yg = *y.get();
+                            if fresh && !yg.1 {
+                                y.insert((yg.0,true));true
+                            } else {false}
+                        },
+                        Vacant(y)=>{y.insert((size,fresh));true}
                     }
                 });
                 if xtl.len()==0 {continue;}
@@ -386,7 +391,7 @@ impl NTFABuilder {
                     if *xt == self.input_type && compare_strictlysmaller(builder,subexpressions,x,input).ok() {
                         println!("back to the drawing board. From {:?} to {:?}",DebugTypedValue{val:input,ty:self.input_type,expr:builder},DebugTypedValue{val:x,ty:self.input_type,expr:builder});
                         if !previous_accepting_states.contains_key(&x) {
-                            queue.push(QueueElem{item:(x,xtl),priority:size});
+                            queue.push(QueueElem{item:(x,xtl,fresh),priority:size});
                             stack.push(new_stack_elem(
                                 x,
                                 self.input_type,
@@ -421,34 +426,46 @@ impl NTFABuilder {
                         _ => {}
                     }
                 }
-                match &builder.values[x].0 {
-                    PairValue(y,z)=>{
-                        res.add_rule(3,vec![x],*y);
-                        res.add_rule(4,vec![x],*z);
-                        queue.push(QueueElem{item:(*y,res_fst),priority:size+1});
-                        queue.push(QueueElem{item:(*z,res_snd),priority:size+1});
+                if fresh {
+                    match &builder.values[x].0 {
+                        PairValue(y,z)=>{
+                            if *y!=1 {
+                                res.add_rule(3,vec![x],*y);
+                                queue.push(QueueElem{item:(*y,res_fst,true),priority:size+1});
+                            }
+                            if *z!=1 {
+                                res.add_rule(4,vec![x],*z);
+                                queue.push(QueueElem{item:(*z,res_snd,true),priority:size+1});
+                            }
+                        }
+                        LValue(y)=>{
+                            if *y!=1 {
+                                res.add_rule(7,vec![x],*y);
+                                queue.push(QueueElem{item:(*y,res_ul,true),priority:size+1});
+                            }
+                        }
+                        RValue(y)=>{
+                            if *y!=1 {
+                                res.add_rule(8,vec![x],*y);
+                                queue.push(QueueElem{item:(*y,res_ur,true),priority:size+1});
+                            }
+                        }
+                        _=>{}
                     }
-                    LValue(y)=>{
-                        res.add_rule(7,vec![x],*y);
-                        queue.push(QueueElem{item:(*y,res_ul),priority:size+1});
-                    }
-                    RValue(y)=>{
-                        res.add_rule(8,vec![x],*y);
-                        queue.push(QueueElem{item:(*y,res_ur),priority:size+1});
-                    }
-                    _=>{}
                 }
                 if res_l.len()>0 {
                     let nh = builder.get_l(x);
                     res.add_rule(5,vec![x],nh);
-                    queue.push(QueueElem{item:(nh,res_l),priority:size+1});
+                    queue.push(QueueElem{item:(nh,res_l,false),priority:size+1});
                 }
                 if res_r.len()>0 {
                     let nh = builder.get_r(x);
                     res.add_rule(6,vec![x],nh);
-                    queue.push(QueueElem{item:(nh,res_r),priority:size+1});
+                    queue.push(QueueElem{item:(nh,res_r,false),priority:size+1});
                 }
+                // println!("checkpoint...");
                 for xt in xtl.iter() {
+                    // println!("xtl...");
                     let oua = if let Some(y) = &output {y.accepts(x)} else {true};
                     if *xt == self.output_type && oua && confirmer.accepts(builder,input,x) {
                         accepting_states.insert(x);
@@ -456,7 +473,7 @@ impl NTFABuilder {
                     if *xt == self.input_type && compare_strictlysmaller(builder,subexpressions,x,input).ok() {
                         for bub in &previous_accepting_states[&x] {
                             res.add_rule(10,vec![x],*bub);
-                            queue.push(QueueElem{item:(*bub,vec![self.output_type]),priority:size+1});
+                            queue.push(QueueElem{item:(*bub,vec![self.output_type],true),priority:size+1});
                         }
                     }
                     if let Some(z) = builder.stupid_typemap.get(&xt) {
@@ -485,7 +502,7 @@ impl NTFABuilder {
                                 if csize>=k {continue;}
                                 let exec = builder.exec_function(*f_ind,cart.clone());
                                 res.add_rule(11+*f_ind,cart,exec);
-                                queue.push(QueueElem{item:(exec,vec![restype]),priority:csize+1});
+                                queue.push(QueueElem{item:(exec,vec![restype],true),priority:csize+1});
                             }
                         }
                     }
@@ -494,7 +511,7 @@ impl NTFABuilder {
                             let w=*w;
                             let merged = builder.get_pair(x,x);
                             res.add_rule(2,vec![x,x],merged);
-                            queue.push(QueueElem{item:(merged,vec![w]),priority:size*2+1});
+                            queue.push(QueueElem{item:(merged,vec![w],false),priority:size*2+1});
                         }
                     }
                     if let Some(z) = builder.left_type_hashes.get(&xt) {
@@ -506,7 +523,7 @@ impl NTFABuilder {
                                     if *usi+size>=k {continue;}
                                     let merged = builder.get_pair(x,*u);
                                     res.add_rule(2,vec![x,*u],merged);
-                                    queue.push(QueueElem{item:(merged,vec![*w]),priority:*usi+size+1});
+                                    queue.push(QueueElem{item:(merged,vec![*w],false),priority:*usi+size+1});
                                 }
                             }
                         }
@@ -520,7 +537,7 @@ impl NTFABuilder {
                                     if *usi+size>=k {continue;}
                                     let merged = builder.get_pair(*u,x);
                                     res.add_rule(2,vec![*u,x],merged);
-                                    queue.push(QueueElem{item:(merged,vec![*w]),priority:*usi+size+1});
+                                    queue.push(QueueElem{item:(merged,vec![*w],false),priority:*usi+size+1});
                                 }
                             }
                         }
@@ -554,8 +571,11 @@ impl NTFABuilder {
             } = stack.pop().unwrap();
             // println!("{:?} resulted in: {:#?}",DebugValue{t:input,expr:builder},res);
             // println!("constructed one.");
-            res.determinize();
+            // println!("determinizing...");
+            // res.determinize();
+            println!("converting...");
             graph_buffer.insert(input,res.convert(self,builder,&accepting_states));
+            println!("converted!");
             previous_accepting_states.insert(input,accepting_states);
         }
         graph_buffer.remove(&input).unwrap()

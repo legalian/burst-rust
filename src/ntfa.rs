@@ -99,7 +99,7 @@ pub struct NTFABuilder {
 
 impl NTFABuilder {
     pub fn intersect(&mut self,mut a_start:usize,mut b_start:usize)->Option<usize> {
-        println!("ENTERING INTERSECT: {} {}",a_start,b_start);
+        // println!("ENTERING INTERSECT: {} {}",a_start,b_start);
         if a_start==b_start {return Some(a_start)}
         if a_start==0 {return Some(b_start)}
         if b_start==0 {return Some(a_start)}
@@ -175,7 +175,7 @@ impl NTFABuilder {
                         }
                     } else {&emptyr};
 
-                    if a_start==a_start_s && b_start==b_start_s {println!("doing an intersect: x:{} y:{}, amt:{}",abase+*x,bbase+*y,amt);}
+                    // if a_start==a_start_s && b_start==b_start_s {println!("doing an intersect: x:{} y:{}, amt:{}",abase+*x,bbase+*y,amt);}
                     let xab : Option<usize> = {
                         if ap==bp {Some(ap)}
                         else if ap==0 {Some(bp)}
@@ -214,7 +214,7 @@ impl NTFABuilder {
                     }
                     *yab=None;
                     let oy=&bl[bbase+*y].1[amt];*y+=1;
-                    println!("{:?} {:?} {:?}",bbase+*y,bbase+blim,bl);
+                    // println!("{:?} {:?} {:?}",bbase+*y,bbase+blim,bl);
                     while *y<blim && bl[bbase+*y].1[amt]==*oy {*y+=1;}
                     if *y>=blim {
                         let ox=&al[abase+*x].1[amt];*x+=1;
@@ -541,6 +541,11 @@ impl SolutionStatus {
         }
         result
     }
+
+
+    
+
+
 }
 
 
@@ -724,35 +729,51 @@ impl PartialNTFA {
         self.rules.entry(r).or_default().push((f,a));
     }
     pub fn determinize(&mut self) {
+        let mut memo : HashMap<Vec<usize>,usize> = HashMap::new();
+        let mut invmemo : HashMap<usize,Vec<usize>> = HashMap::new();
         let mut stack : Vec<((usize,Vec<usize>),HashSet<usize>)> = self.vm.recursion.iter().filter_map(|(a,bs)|
             if bs.len()<2 {None}
             else {Some(((10,vec![*a]),bs.clone()))}
         ).collect();
         while let Some(((f,a),bs)) = stack.pop() {
-            let nval = self.maxins;self.maxins+=1;
+            let mut vv : Vec<usize> = bs.iter().map(|z|invmemo.get(z).cloned().unwrap_or(vec![*z])).flatten().collect();
+            vv.sort_unstable();
+            vv.dedup();
+            let (early,nval) = match memo.entry(vv) {
+                Occupied(z)=>(true,*z.get()),
+                Vacant(z)=>{
+                    let nval=self.maxins;self.maxins+=1;
+                    invmemo.insert(nval,z.key().clone());
+                    z.insert(nval);
+                    (false,nval)
+                }
+            };
+            // println!("{:?}",vv);
             self.rules.entry(nval).or_default().push((f,a.clone()));
             for a in a.iter() {
                 self.occurances.entry(*a).or_default().insert(nval);
             }
+            // println!("one {:?} {:?} {:?}",f,a,bs);
+            for b in bs.iter() {
+                self.rules.get_mut(b).unwrap().retain(|y|y.0 != f || y.1 != a);
+            }
+            if early {continue}
             let mut allocc = HashSet::new();
             let mut conflictcheck : HashMap<(usize,Vec<usize>),HashSet<usize>> = HashMap::new();
             for b in bs.iter() {
                 allocc.extend(self.occurances.get(b).map(|x|x.iter().copied()).into_iter().flatten());
-                self.rules.get_mut(b).unwrap().retain(|y|y.0 != f || y.1 != a);
                 if let Some(zs)=self.occurances.get(b) {
                     for z in zs {
                         let rows = self.rules.get_mut(z).unwrap();
                         let mut i=0;
                         while i<rows.len() {
-                            let mut j=0;
-                            while j<rows[i].1.len() {
+                            for j in 0..rows[i].1.len() {
                                 if rows[i].1[j] == *b {
                                     let mut nc = rows[i].clone();
                                     nc.1[j]=nval;
                                     conflictcheck.entry(nc.clone()).or_default().insert(*z);
                                     rows.push(nc);
                                 }
-                                j+=1;
                             }
                             i+=1;
                         }
@@ -762,6 +783,9 @@ impl PartialNTFA {
                 }
             }
             self.occurances.insert(nval,allocc);
+            // if conflictcheck.iter().any(|(_,b)|b.len()>=2) {
+            //     panic!("two {:?}",conflictcheck.into_iter().filter(|(_,b)|b.len()>=2).collect::<Vec<_>>() );
+            // }
             stack.extend(conflictcheck.into_iter().filter(|(_,b)|b.len()>=2));
         }
     }
@@ -878,7 +902,7 @@ impl PartialNTFA {
                     for amt in 0..l {
                         let mut x=0;
                         while x<b {
-                            if let Anything = deps[a+x].1[amt] {
+                            if if let Anything = deps[a+x].1[amt] {
                                 let mut ooc = Vec::new();
                                 for y in 0..b {
                                     if let Positive(k) = &deps[a+y].1[amt] {
@@ -892,22 +916,20 @@ impl PartialNTFA {
                                     rag.1[amt]=Negative(ooc.clone());
                                     deps[a+x].1[amt]=Positive(ooc);
                                     deps.insert(a+x+1,rag);
-                                    b+=1;
-                                } else {x+=1;}
-                            } else {x+=1;}
-                        }
-                    }
-                    for amt in (0..l).rev() {
-                        for x in 0..b {
-                            let mut y = x+1;
-                            while y<b {
-                                if (0..l).all(|a2|a2==amt || deps[a+x].1[a2]==deps[a+y].1[a2]) {
-                                    let depr = replace(&mut deps.remove(a+y).1[amt],Anything);
-                                    deps[a+x].1[amt] = merge(replace(&mut deps[a+x].1[amt],Anything),depr);
-                                    b-=1;
-                                } else {
-                                    y+=1;
+                                    b+=1;false
+                                } else {true}
+                            } else {true} {
+                                let mut y = x+1;
+                                while y<b {
+                                    if (0..l).all(|a2|a2==amt || deps[a+x].1[a2]==deps[a+y].1[a2]) {
+                                        let depr = replace(&mut deps.remove(a+y).1[amt],Anything);
+                                        deps[a+x].1[amt] = merge(replace(&mut deps[a+x].1[amt],Anything),depr);
+                                        b-=1;
+                                    } else {
+                                        y+=1;
+                                    }
                                 }
+                                x+=1;
                             }
                         }
                     }
