@@ -20,6 +20,7 @@ use std::cmp::Ordering;
 use Ordering::{*};
 use Dsl::{*};
 use ProcType::{*};
+use ProcValue::{*};
 
 
 fn disjoint_union(mut a:HashMap<usize,usize>,b:HashMap<usize,usize>) -> Option<HashMap<usize,usize>> {
@@ -90,37 +91,29 @@ pub struct NTFABuilder {
     pub output_type:usize,
     pub paths:Vec<Vec<(usize,Vec<usize>)>>,//inner vec must be sorted
     pub revhash:HashMap<Vec<(usize,Vec<usize>)>,usize>,
-    pub intersect_memo:HashMap<(usize,usize),(Option<usize>,Option<usize>,Option<usize>)>,//left side of key is less than right side
+    pub intersect_memo:HashMap<(usize,usize),Option<usize>>,//left side of key is less than right side
     pub rename_memo:HashMap<(usize,Vec<usize>),usize>,
     pub subset_memo:HashMap<(usize,usize),bool>,
     // minification_queue:Vec<usize>,
 }
 
 impl NTFABuilder {
-    pub fn intersect(&mut self,mut a_start:usize,mut b_start:usize)->(Option<usize>,Option<usize>,Option<usize>) {
+    pub fn intersect(&mut self,mut a_start:usize,mut b_start:usize)->Option<usize> {
         println!("ENTERING INTERSECT: {} {}",a_start,b_start);
-        if a_start==b_start {return (None,Some(0),None)}
-        if a_start==0 {return (Some(0),Some(a_start),None)}
-        if b_start==0 {return (None,Some(b_start),Some(0))}
+        if a_start==b_start {return Some(a_start)}
+        if a_start==0 {return Some(b_start)}
+        if b_start==0 {return Some(a_start)}
         let key = (min(a_start,b_start),max(a_start,b_start));
-        if let Some(early) = self.intersect_memo.get(&key) {
-            return if b_start<a_start {
-                let (x,y,z) = *early;(z,y,x)
-            } else {*early}
-        }
+        if let Some(early) = self.intersect_memo.get(&key) {return *early}
         let a_start_s = a_start;
         let b_start_s = b_start;
         #[derive(Debug)]
         struct OuterStack {
             a_start:usize,b_start:usize,
             ai:usize,bi:usize,
-            totalaa:Vec<(usize,Vec<usize>)>,
             deps_ab:Vec<(usize,Vec<usize>)>,
-            totalbb:Vec<(usize,Vec<usize>)>,
             innerstack:Vec<InnerStack>,
-            placeaa:usize,
             placeab:usize,
-            placebb:usize
         }
         #[derive(Debug)]
         struct InnerStack {
@@ -131,30 +124,19 @@ impl NTFABuilder {
             y:usize,
             abase:usize,
             bbase:usize,
-            yi:usize,
             totalab:Vec<Vec<usize>>,
-            bp : Vec<Option<usize>>,
-            ap : usize,
             yab : Option<Vec<Vec<usize>>>
         }
         let emptyr = vec![Vec::new()];
         let mut outerstack:Vec<OuterStack>=Vec::new();
 
         let mut ai=0;let mut bi=0;
-        let mut totalaa = Vec::new();
-        let mut totalbb = Vec::new();
         let mut deps_ab = Vec::new();
 
         let mut innerstack:Vec<InnerStack>=Vec::new();
 
-        let mut placeaa = self.get_placeholder();
         let mut placeab = self.get_placeholder();
-        let mut placebb = self.get_placeholder();
-        if b_start<a_start {
-            self.intersect_memo.insert(key,(Some(placebb),Some(placeab),Some(placeaa)));
-        } else {
-            self.intersect_memo.insert(key,(Some(placeaa),Some(placeab),Some(placebb)));
-        }
+        self.intersect_memo.insert(key,Some(placeab));
         
         'outerloop: loop {
             let al = &self.paths[a_start];
@@ -162,7 +144,7 @@ impl NTFABuilder {
             // println!("from double top");
             // println!("begin outerloop: {:#?} astart:{} bstart:{} {:?}",outerstack,a_start,b_start,innerstack);
             // println!("-=-=-=-=-=-=-=-");
-            'innerloop: while let Some(InnerStack{amt,alim,blim,x,y,abase,bbase,yi,totalab,bp,ap,yab}) = innerstack.last_mut() {
+            'innerloop: while let Some(InnerStack{amt,alim,blim,x,y,abase,bbase,totalab,yab}) = innerstack.last_mut() {
                 // println!("innerloop: f:{},x:{},y:{}, amt:{}, yab:{:?} ",al[*abase+*x].0,*abase+*x,*bbase+*y,amt,yab);
 
                 // if *amt != TODOREMOVE-1 {
@@ -174,196 +156,91 @@ impl NTFABuilder {
                 // println!("from top ");
                 loop {
                     // println!("reached point: *x:{} amt:{},y:{},yi:{}, bplen:{}, bllen:{}, compolen:{}",*x,amt,bbase+*y,*yi,bp.len(),bl.len(),bl[bbase+*y].1.len());
-                    if let Some(bps) = if bp.len()==*yi {Some(bl[bbase+*y].1[amt])} else {bp[*yi]} {
-                        let rw=if amt+1<fl {
-                            if let Some(y)=yab {y} else {
-                                // println!("whoa {} ({},{},{}) ({},{},{}) {:?} {:?}",amt,abase,x,alim,bbase,y,blim,al,bl);
-                                let x=*x;let y=*y;
-                                // if a_start==a_start_s && b_start==b_start_s {println!("pushing inner: x:{} y:{}, amt:{}",abase+x,bbase+y,amt+1);}
-                                innerstack.push(InnerStack {
-                                    yab:None,
-                                    bp:Vec::new(),
-                                    ap:al[abase+x].1[amt+1].clone(),
-                                    totalab:Vec::new(),
-                                    x:0,y:0,yi:0,abase:abase+x,bbase:bbase+y,amt:amt+1,
-                                    alim:al[abase+x..].iter().take(alim).position(|(_,v)|v[amt] != al[abase+x].1[amt]).unwrap_or(alim),
-                                    blim:bl[bbase+y..].iter().take(blim).position(|(_,v)|v[amt] != bl[bbase+y].1[amt]).unwrap_or(blim)
-                                });
-                                // println!("from innerloop continue A!");
-                                continue 'innerloop;
-                            }
-                        } else {&emptyr};
+                    let bp = bl[bbase+*y].1[amt];
+                    let ap = al[abase+*x].1[amt];
+                    let rw=if amt+1<fl {
+                        if let Some(y)=yab {y} else {
+                            // println!("whoa {} ({},{},{}) ({},{},{}) {:?} {:?}",amt,abase,x,alim,bbase,y,blim,al,bl);
+                            let x=*x;let y=*y;
+                            // if a_start==a_start_s && b_start==b_start_s {println!("pushing inner: x:{} y:{}, amt:{}",abase+x,bbase+y,amt+1);}
+                            innerstack.push(InnerStack {
+                                yab:None,
+                                totalab:Vec::new(),
+                                x:0,y:0,abase:abase+x,bbase:bbase+y,amt:amt+1,
+                                alim:al[abase+x..].iter().take(alim).position(|(_,v)|v[amt] != al[abase+x].1[amt]).unwrap_or(alim-x),
+                                blim:bl[bbase+y..].iter().take(blim).position(|(_,v)|v[amt] != bl[bbase+y].1[amt]).unwrap_or(blim-y)
+                            });
+                            // println!("from innerloop continue A!");
+                            continue 'innerloop;
+                        }
+                    } else {&emptyr};
 
-                        // for rz in rw.iter() {
-                        //     if fl!=amt+rz.len()+1 {
-                        //         let x=*x;let y=*y;let rzl=rz.len();
-                        //         println!("{:#?}",innerstack);
-                        //         println!("{:?}",deps_ab);
-                        //         println!(" {:?} {} {}\n {:?} {} {}",al,abase+x,ai,bl,bbase+y,bi);
-                        //         panic!("{}: {} {} {} ",al[abase].0,fl,amt,rzl)
-                        //     }
-                        // }
-                        // println!("checking: {} {}",ap,bps);
-                        let (xaa,xab,xbb) : (Option<usize>,Option<usize>,Option<usize>) = {
-                            if *ap==bps {(None,Some(*ap),None)}
-                            else if *ap==0  {(Some(0),Some(bps),None)}
-                            else if bps==0 {(None,Some(*ap),Some(0))}
-                            else {
-                                let ap=*ap;
-                                let key = (min(ap,bps),max(ap,bps));
-                                match self.intersect_memo.entry(key) {
-                                    Occupied(z)=>{
-                                        if bps<ap {
-                                            let (x,y,z) = *z.get();(z,y,x)
-                                        } else {*z.get()}
-                                    }
-                                    Vacant(_)=>{
-
-            // println!("{}^{} = ({:?},{:?},{:?}), ad={:?}, bd={:?}, center = {:?}",a_start,b_start,rpvaa,rpvab,rpvbb,self.paths[a_start],self.paths[b_start],deps_ab);
-            
-                                        outerstack.push(OuterStack{
-                                            a_start,b_start,
-                                            ai,bi,
-                                            totalaa:take(&mut totalaa),totalbb:take(&mut totalbb),deps_ab:take(&mut deps_ab),
-                                            innerstack:take(&mut innerstack),
-                                            placeaa,placeab,placebb
-                                        });
-                                        ai=0;bi=0;
-                                        a_start=ap;
-                                        b_start=bps;
-                                        placeaa = self.get_placeholder();
-                                        placeab = self.get_placeholder();
-                                        placebb = self.get_placeholder();
-                                        // println!("intersected: {:?} {:?} {:?}",(placeaa,placeab,placebb));
-                                        if bps<ap {
-                                            self.intersect_memo.insert(key,(Some(placebb),Some(placeab),Some(placeaa)));
-                                        } else {
-                                            self.intersect_memo.insert(key,(Some(placeaa),Some(placeab),Some(placebb)));
-                                        }
-                                        // println!("pushing to outer stack new goal: {}^{} {:?} {:?}",a_start,b_start,self.paths[a_start],self.paths[b_start]);
-                                        // println!("from outerloop continue A!");
-                                        continue 'outerloop;
-                                    }
+                    if a_start==a_start_s && b_start==b_start_s {println!("doing an intersect: x:{} y:{}, amt:{}",abase+*x,bbase+*y,amt);}
+                    let xab : Option<usize> = {
+                        if ap==bp {Some(ap)}
+                        else if ap==0 {Some(bp)}
+                        else if bp==0 {Some(ap)}
+                        else {
+                            match self.intersect_memo.entry((min(ap,bp),max(ap,bp))) {
+                                Occupied(z)=>*z.get(),
+                                Vacant(_)=>{
+                                    outerstack.push(OuterStack{
+                                        a_start,b_start,
+                                        ai,bi,
+                                        deps_ab:take(&mut deps_ab),
+                                        innerstack:take(&mut innerstack),
+                                        placeab
+                                    });
+                                    ai=0;bi=0;
+                                    a_start=ap;
+                                    b_start=bp;
+                                    placeab = self.get_placeholder();
+                                    // println!("intersected: {:?} {:?} {:?}",(placeaa,placeab,placebb));
+                                    let key = (min(ap,bp),max(ap,bp));
+                                    self.intersect_memo.insert(key,Some(placeab));
+                                    // println!("pushing to outer stack new goal: {}^{} {:?} {:?}",a_start,b_start,self.paths[a_start],self.paths[b_start]);
+                                    // println!("from outerloop continue A!");
+                                    continue 'outerloop;
                                 }
                             }
-                        };
-
-                        if let Some(z) = xab {
-                            for rz in rw.iter() {
-                                let mut we = rz.clone();
-                                we.insert(0,z);
-                                // println!(" {} {} {} ",fl,amt,we.len());
-                                if fl!=amt+we.len() {panic!(" {} {} {} ",fl,amt,we.len())}
-                                totalab.push(we);
-                            }
                         }
-                        if bp.len()==*yi {bp.push(xbb);}
-                        else {bp[*yi]=xbb;}
-                        *ap=match xaa {Some(z)=>z,None=>{
-                            // if a_start==a_start_s && b_start==b_start_s {println!("early abort: xaa is none. ap: {}, bps: {}, {},{} amt:{} ADEPS:{:?} BDEPS:{:?}",*ap,bps,abase+*x,bbase+*y,amt,self.paths[a_start],self.paths[b_start]);}
-                            let ox=&al[abase+*x].1[amt];*x+=1;
-                            while *x<alim && al[abase+*x].1[amt]==*ox {*x+=1;}
-                            if *x>=alim {
-                                // if a_start==a_start_s && b_start==b_start_s {println!("exiting (1) amt:{}",amt);}
-                                break;
-                            }
-                            *ap=al[abase+*x].1[amt].clone();
-                            *y=0;*yi=0;
-                            // println!("from semibottom");
-                            continue;
-                        }};
+                    };
+                    if let Some(z) = xab {
+                        for rz in rw.iter() {
+                            let mut we = rz.clone();
+                            we.insert(0,z);
+                            totalab.push(we);
+                        }
                     }
-                    // else {
-                    //     if a_start==a_start_s && b_start==b_start_s {println!("skipped loop: bps is none");}
-                    // }
-                    // let OLDY = bbase+*y;
+                    *yab=None;
                     let oy=&bl[bbase+*y].1[amt];*y+=1;
+                    println!("{:?} {:?} {:?}",bbase+*y,bbase+blim,bl);
                     while *y<blim && bl[bbase+*y].1[amt]==*oy {*y+=1;}
-                    *yi+=1;
-                    // if *x>
-                    // println!("advancing yi;")
-                    // if a_start==a_start_s && b_start==b_start_s {println!("advancing B {} to {}",OLDY,bbase+*y);}
                     if *y>=blim {
-                        // let OLDX = abase+*x;
+                        let ox=&al[abase+*x].1[amt];*x+=1;
+                        while *x<alim && al[abase+*x].1[amt]==*ox {*x+=1;}
+                        if *x>=alim {break;}
+                        *y=0;
+                    }
+                }
 
-                        let ox=&al[abase+*x].1[amt];totalaa.push({let mut h=al[abase+*x].clone();h.1[amt]=ap.clone();h});*x+=1;
-                        while *x<alim && al[abase+*x].1[amt]==*ox {totalaa.push({let mut h=al[abase+*x].clone();h.1[amt]=ap.clone();h});*x+=1;}
-                        // if a_start==a_start_s && b_start==b_start_s {println!("advancing A {} to {}, resetting B",OLDX,abase+*x);}
-                        if *x>=alim {
-                            // if a_start==a_start_s && b_start==b_start_s {println!("exiting (2) amt:{}",amt);}
-                            break;
-                        }
-                        *ap=al[abase+*x].1[amt].clone();
-                        *y=0;*yi=0;
-                    }
-                    // println!("from bottom!");
-                }
-                let mut y = bbase;
-                let mut yi = 0;
-                while y<blim {
-                    if yi==bp.len() {
-                        totalbb.push(bl[bbase+y].clone());
-                        y+=1;
-                        continue;
-                    }
-                    let oy=&bl[bbase+y].1[amt];
-                    if let Some(z)=&bp[yi] {totalbb.push({let mut h=bl[bbase+y].clone();h.1[amt]=z.clone();h});}
-                    y+=1;
-                    while y<blim && bl[bbase+y].1[amt]==*oy {
-                        if let Some(z)=&bp[yi] {totalbb.push({let mut h=bl[bbase+y].clone();h.1[amt]=z.clone();h});}
-                        y+=1;
-                    }
-                    yi+=1
-                }
-                // println!("reached end");
-                // for i in 0..innerstack.len()-1 {
-                //     if innerstack[i].amt+1!=innerstack[i+1].amt {
-                //         panic!();
-                //     }
-                // }
-                // for st in innerstack.iter() {
-                //     for rz in st.totalab.iter() {
-                //         if fl!=st.amt+rz.len() {panic!(" {} {} {} ",fl,amt,rz.len())}
-                //     }
-                // }
                 let ff = innerstack.pop().unwrap();
                 match innerstack.last_mut() {
                     Some(o)=>{
-                        // if ff.totalab.len()>0 && fl!=ff.totalab[0].len()+o.amt+1 {
-                        //     panic!("trouble");
-                        // }
-                        // if o.yab.is_some() {
-                        //     panic!()
-                        // }
                         o.yab = Some(ff.totalab);
-                        // println!("assign to yab: from {:?}",innerstack);
                     }
                     None=>{
-                        // if ai!=abase || bi!=bbase {
-                        //     panic!();
-                        // }
                         let f=al[ai].0;
-                        for j in ff.totalab {
-
-                            // if debug_expectedlen(f)!=Some(j.len()) {
-                            //     panic!(
-                            //         "addign: {},{:?}",f,j
-                            //     );
-                            // }
-
-                            deps_ab.push((f,j));
-                        }
+                        for j in ff.totalab {deps_ab.push((f,j));}
                         ai+=ff.alim;
                         bi+=ff.blim;
                         break;
                     }
                 }
             }
-            // let mut int_anb=Vec::new();
-            // let mut int_ab=Vec::new();
             while ai<al.len() && bi<bl.len() {
-                if al[ai].0<bl[bi].0 {totalaa.push(al[ai].clone());ai+=1;}
-                else if al[ai].0>bl[bi].0 {totalbb.push(bl[bi].clone());bi+=1;}
+                if al[ai].0<bl[bi].0 {ai+=1;}
+                else if al[ai].0>bl[bi].0 {bi+=1;}
                 else {
                     let f=al[ai].0;
                     if al[ai].1.len()==0 {
@@ -373,164 +250,44 @@ impl NTFABuilder {
                     } else {
                         let alim=al[ai..].iter().position(|(f2,_)|*f2 != f).unwrap_or(al.len()-ai);
                         let blim=bl[bi..].iter().position(|(f2,_)|*f2 != f).unwrap_or(bl.len()-bi);
-                        // println!("addressing: {} {} {} {:?} {:?}",f,alim,blim,al,bl);
                         innerstack.push(InnerStack{
                             amt:0,alim,blim,
                             x:0,
                             y:0,
                             abase:ai,
                             bbase:bi,
-                            yi:0,
                             totalab:Vec::new(),
-                            bp:Vec::new(),
-                            ap:al[ai].1[0].clone(),
                             yab:None,
                         });
-                        // println!("from outerloop continue B!");
                         continue 'outerloop;
                     }
                 }
             }
 
-    //                 let ff = stack.pop().unwrap();
-
-            
-
-            // panic!("do mergey simplify of everything");
-
-            // let Some(bps) = if *x==0 {Some(&bl[bbase+*y].1[amt])} else {bp[*yi].as_ref()}
-
-
-
-            let rpvaa = if totalaa.len()==0 {None} else {Some(self.insert_into_placeholder(totalaa,placeaa))};
             let rpvab = if deps_ab.len()==0 {None} else {Some(self.insert_into_placeholder(deps_ab,placeab))};
-            let rpvbb = if totalbb.len()==0 {None} else {Some(self.insert_into_placeholder(totalbb,placebb))};
-
-            // println!("{}^{} = ({:?},{:?},{:?}), ad={:?}, bd={:?}, center = {:?}",a_start,b_start,rpvaa,rpvab,rpvbb,self.paths[a_start],self.paths[b_start],deps_ab);
             
             if let Some(o) = outerstack.pop() {
                 a_start=o.a_start;b_start=o.b_start;
                 ai=o.ai;bi=o.bi;
-                totalaa=o.totalaa;
                 deps_ab=o.deps_ab;
-                totalbb=o.totalbb;
                 innerstack=o.innerstack;
-                placeaa=o.placeaa;
                 placeab=o.placeab;
-                placebb=o.placebb;
-                if rpvaa != Some(placeaa) || rpvab != Some(placeab) || rpvbb != Some(placebb) {
+                if rpvab != Some(placeab) {
                     let j = innerstack.last_mut().unwrap();
-                    // println!("");
-                    // println!("WHATEVER 1 {:?}",self.paths[b_start]);
-                    // println!("WHATEVER 2 {:?}",self.paths[b_start][j.bbase+j.y]);
-                    // println!("WHATEVER 3 {:?}",self.paths[b_start][j.bbase+j.y].1[j.amt]);
-                    // println!("WHATEVER 4 {:?}",self.paths[b_start][j.bbase+j.y].1[j.amt]);
 
-                    let r_key_a = if j.yi==j.bp.len() {self.paths[b_start][j.bbase+j.y].1[j.amt]} else {j.bp[j.yi].unwrap()};
-                    let r_key_b = j.ap;
-                    if r_key_a<r_key_b {
-                        self.intersect_memo.insert((r_key_a,r_key_b),(rpvaa,rpvab,rpvbb));//harmlessly replace old value
-                    } else {
-                        self.intersect_memo.insert((r_key_b,r_key_a),(rpvbb,rpvab,rpvaa));//harmlessly replace old value
-                    }
+                    let r_key_a = self.paths[a_start][j.abase+j.x].1[j.amt];
+                    let r_key_b = self.paths[b_start][j.bbase+j.y].1[j.amt];
+                    self.intersect_memo.insert((min(r_key_a,r_key_b),max(r_key_a,r_key_b)),rpvab);//harmlessly replace old value
                 }
             } else {
-                if rpvaa != Some(placeaa) || rpvab != Some(placeab) || rpvbb != Some(placebb) {
-                    if a_start_s<b_start_s {
-                        self.intersect_memo.insert((a_start_s,b_start_s),(rpvaa,rpvab,rpvbb));//harmlessly replace old value
-                    } else {
-                        self.intersect_memo.insert((b_start_s,a_start_s),(rpvbb,rpvab,rpvaa));//harmlessly replace old value
-                    }
+                if rpvab != Some(placeab) {
+                    self.intersect_memo.insert((min(a_start_s,b_start_s),max(a_start_s,b_start_s)),rpvab);//harmlessly replace old value
                 }
-                return (rpvaa,rpvab,rpvbb);
+                return rpvab;
             }
         }
     }
 
-    // fn indepth_simplify(&mut self,start:usize) {
-    //     // if !self.closed_expr.insert(start) {return;}
-    //     let mut deps = self.paths[start].clone();
-    //     let mut a=0;
-    //     while a<deps.len()-1 {
-    //         let f = deps[a].0;
-    //         let mut b=1;
-    //         while deps[a+b].0==f {
-    //             for c in 0..b {
-    //                 let al = &deps[a+c].1;
-    //                 let bl = &deps[a+b].1;
-    //                 let mut i=0;
-    //                 while i<al.len() && al[i] == bl[i] {i+=1;}
-    //                 if i>=al.len() {
-    //                     "it wasn't deduped!";
-    //                     // deps.remove(a+b);
-    //                     // b-=1;break;
-    //                 }
-    //                 let l=i;
-    //                 i+=1;
-    //                 while i<al.len() && al[i] == bl[i] {i+=1;}
-    //                 if i>=al.len() {
-    //                     let mut combo : Vec<_> = dedup_merge(self.paths[al[l]].clone(),self.paths[bl[l]].clone());
-    //                     let mut rstack = Vec::new();
-    //                     let mut d = b+1;
-    //                     while a+d<deps.len() && deps[a+d].0==f {
-    //                         if (0..deps[a+c].1.len()).all(|i|i==l || deps[a+d].1[i]==deps[a+c].1[i]) {
-    //                             combo = dedup_merge(combo,self.paths[deps[a+d].1[l]].clone());
-    //                             rstack.push(d);
-    //                         }
-    //                         d+=1;
-    //                     }
-    //                     // println!("stack: {} {:?}",b,rstack);
-    //                     for r in rstack.into_iter().rev() {deps.remove(a+r);}
-    //                     deps.remove(a+b);
-    //                     let tmp = self.get_ntfa_unchecked(combo);
-    //                     deps[a+c].1[l]=tmp;
-    //                     b=0;break;
-    //                 }
-    //             }
-    //             b+=1;
-    //             if a+b>=deps.len() {break;}
-    //         }
-    //         a+=b;
-    //     }
-    //     self.revhash.insert(deps.clone(),start);
-    //     self.paths[start] = deps;
-    // }
-    // fn small_simplification(deps: &mut Vec<(usize,Vec<usize>)>) {
-    //     deps.sort_unstable();
-    //     deps.dedup();
-    // }
-    // fn check_requires_further(deps: &[(usize,Vec<usize>)])->bool {
-    //     let mut requires_further = false;
-    //     let mut a=0;
-    //     'outer: while a<deps.len()-1 {
-    //         let f = deps[a].0;
-    //         let mut b=1;
-    //         while deps[a+b].0==f {
-    //             for c in 0..b {
-    //                 let al = &deps[a+c].1;
-    //                 let bl = &deps[a+b].1;
-    //                 let mut i=0;
-    //                 while i<al.len() && al[i] == bl[i] {i+=1;}
-    //                 if i>=al.len() {"wasn't deduped..."}
-    //                 i+=1;
-    //                 while i<al.len() && al[i] == bl[i] {i+=1;}
-    //                 if i>=al.len() {
-    //                     // println!("rewuires: {}   {:?} {:?}",f,al,bl);
-    //                     requires_further=true;
-    //                     break 'outer;
-    //                 }
-    //             }
-    //             b+=1;
-    //             if a+b>=deps.len() {break;}
-    //         }
-    //         a+=b;
-    //     } requires_further
-    // }
-    
-    // fn get_ntfa(&mut self,mut deps:Vec<(usize,Vec<usize>)>)->usize {
-    //     // NTFABuilder::small_simplification(&mut deps);
-    //     self.get_ntfa_unchecked(deps)
-    // }
     fn get_ntfa(&mut self,deps:Vec<(usize,Vec<usize>)>)->usize {
         match self.revhash.entry(deps) {
             Occupied(x)=>*x.get(),
@@ -564,173 +321,6 @@ impl NTFABuilder {
             }
         }
     }
-
-    // pub fn forget_minification_queue(&mut self) {
-    //     self.minification_queue = Vec::new();
-    // }
-
-    // pub fn deplete_minification_queue(&mut self) {
-    //     while let Some(i) = self.minification_queue.pop() {
-    //         self.indepth_simplify(i);
-    //     }
-    // }
-
-    // pub fn getmergedvl(&self,ind:Vec<(usize,usize)>)->IntoIter<(usize,Vec<Vec<(usize,usize)>>)> {
-    //     let mut buf_a:Vec<(usize,Vec<usize>)>;let mut buf_b:Vec<(usize,Vec<usize>)>;
-    //     let (al,bl) : (&[(usize,Vec<usize>)],&[(usize,Vec<usize>)]) = if ind.len()>1 {
-    //         buf_a = Vec::new();
-    //         buf_b = Vec::new();
-    //         for (sa,sb) in ind {
-    //             buf_a.extend(self.paths[sa].clone());
-    //             buf_b.extend(self.paths[sb].clone());
-    //         }
-    //         buf_a.sort_unstable();
-    //         buf_b.sort_unstable();
-    //         buf_a.dedup();
-    //         buf_b.dedup();
-    //         (&buf_a,&buf_b)
-    //     } else {
-    //         (&self.paths[ind[0].0],&self.paths[ind[0].1])
-    //     };
-    //     let mut a=0;
-    //     let mut b=0;
-    //     let mut ao;
-    //     let mut bo;
-    //     let mut deps = Vec::new();
-    //     while a<al.len() && b<bl.len() {
-    //         if al[a].0<bl[b].0 {a+=1;}
-    //         else if al[a].0>bl[b].0 {b+=1;}
-    //         else {
-    //             let f=al[a].0;
-    //             ao=0;
-    //             bo=0;
-    //             while a+ao<al.len() && al[a+ao].0==f {
-    //                 bo=0;
-    //                 while b+bo<bl.len() && bl[b+bo].0==f {
-    //                     let mut res = Vec::new();
-    //                     for i in 0..al[a+ao].1.len() {
-    //                         res.push(vec![(min(al[a+ao].1[i],bl[b+bo].1[i]),max(al[a+ao].1[i],bl[b+bo].1[i]))]);
-    //                     }
-    //                     deps.push((f,res));
-    //                     bo+=1;
-    //                 }
-    //                 ao+=1;
-    //             }
-    //             a+=ao;
-    //             b+=bo;
-    //         }
-    //     }
-    //     deps.sort_unstable();
-    //     let mut a=0;
-    //     while a+1<deps.len() {
-    //         // println!("checkpoint 1: {} {}",deps.len(),a);
-    //         let f = deps[a].0;
-    //         let mut b=1;
-    //         while deps[a+b].0==f {
-    //             for c in 0..b {
-    //                 let al = &deps[a+c].1;
-    //                 let bl = &deps[a+b].1;
-    //                 let mut i=0;
-    //                 while i<al.len() && al[i] == bl[i] {i+=1;}
-    //                 if i>=al.len() {
-    //                     deps.remove(a+b);
-    //                     b-=1;break;
-    //                 }
-    //                 let l=i;
-    //                 i+=1;
-    //                 while i<al.len() && al[i] == bl[i] {i+=1;}
-    //                 if i>=al.len() {
-    //                     let depr = take(&mut deps.remove(a+b).1[l]);
-    //                     deps[a+c].1[l] = dedup_merge(take(&mut deps[a+c].1[l]),depr);
-    //                     b=0;break;
-    //                 }
-    //             }
-    //             b+=1;
-    //             if a+b>=deps.len() {break;}
-    //         }
-    //         a+=b;
-    //     } deps.into_iter()
-    // }
-
-    // pub fn intersect(&mut self,a_start:usize,b_start:usize) -> Option<usize> {
-    //     if a_start==b_start {return Some(a_start);}
-    //     struct ArtificialStack {
-    //         outercollect: Vec<(usize,Vec<usize>)>,
-    //         innercollect: Vec<usize>,
-    //         outertrav: IntoIter<(usize,Vec<Vec<(usize,usize)>>)>,
-    //         innertrav: Vec<Vec<(usize,usize)>>,
-    //         innertoken: usize,
-    //         place:usize
-    //     }
-    //     let mut stack:Vec<ArtificialStack> = Vec::new();
-    //     let snok = vec![(min(a_start,b_start),max(a_start,b_start))];
-    //     let place = self.get_placeholder();
-    //     self.intersect_memo.insert(snok.clone(),Some(place));
-    //     let mut outertrav = self.getmergedvl(snok);
-    //     let (innertoken,intv) = match outertrav.next() {
-    //         Some(x)=>x,None=>{return None;}
-    //     };
-    //     stack.push(ArtificialStack{
-    //         outercollect:Vec::new(),
-    //         innercollect:Vec::new(),
-    //         outertrav,
-    //         innertoken,
-    //         innertrav:intv,
-    //         place,
-    //     });
-    //     loop {
-    //         let x = stack.last_mut().unwrap();
-    //         loop {
-    //             if let Some(subl) = x.innertrav.pop() {
-    //                 match if subl.len()==1 && (subl[0].0==subl[0].1 || Some(subl[0].1)==self.uneval_hack) {Some(Some(subl[0].0))}
-    //                     else if subl.len()==1 && Some(subl[0].0)==self.uneval_hack {Some(Some(subl[0].1))}
-    //                     else {self.intersect_memo.get(&subl).copied()} {
-    //                     Some(Some(y))=>{x.innercollect.push(y);continue;}
-    //                     Some(None)=>{x.innercollect.clear();}
-    //                     None=>{
-    //                         let mut outertrav = self.getmergedvl(subl.clone());
-    //                         if let Some((innertoken,intv)) = outertrav.next() {
-    //                             let place = self.get_placeholder();
-    //                             self.intersect_memo.insert(subl.clone(),Some(place));
-    //                             x.innertrav.push(subl);
-    //                             stack.push(ArtificialStack{
-    //                                 outercollect:Vec::new(),
-    //                                 innercollect:Vec::new(),
-    //                                 outertrav,
-    //                                 innertoken,
-    //                                 innertrav:intv,
-    //                                 place,
-    //                             });
-    //                             break;
-    //                         } else {x.innercollect.clear();}
-    //                     }
-    //                 }
-    //             } else {
-    //                 let v = take(&mut x.innercollect);
-    //                 x.outercollect.push((x.innertoken,v));
-    //             }
-    //             if let Some((innertoken,intv))=x.outertrav.next() {
-    //                 x.innertoken=innertoken;
-    //                 x.innertrav=intv;
-    //             } else {
-    //                 let ff = stack.pop().unwrap();
-    //                 let rpv = if ff.outercollect.len()==0 {None} else {Some(self.insert_into_placeholder(ff.outercollect,ff.place))};
-    //                 match stack.last() {
-    //                     Some(x)=>{
-    //                         if rpv != Some(ff.place) {
-    //                             let fl = x.innertrav.last().unwrap();
-    //                             self.intersect_memo.insert(fl.clone(),rpv);//harmlessly replace old value
-    //                         }
-    //                     }
-    //                     None=>{
-    //                         return rpv
-    //                     }
-    //                 }
-    //                 break;
-    //             }
-    //         }
-    //     }
-    // }
 
     pub fn get_accepting_run(
         &self,
@@ -800,7 +390,7 @@ impl NTFABuilder {
 pub struct SolutionStatus {
     dsl:Dsl,
     size:usize,
-    value:Vec<usize>,
+    value:Vec<Option<usize>>,
     mapping:Option<Rc<HashMap<usize,usize>>>
 }
 #[derive(Debug)]
@@ -883,46 +473,67 @@ impl SolutionStatus {
         };
         if a==10 {
             let biz = (0..m.len()).map(|i|{
-                let u:Vec<_> = m[i].recursion.get(&ex[0][i]).map(|x|x.iter().copied()).into_iter().flatten().collect();
+                let u:Option<Vec<usize>> = ex[0][i].map(|z|m[i].recursion.get(&z).map(|x|x.iter().copied()).into_iter().flatten().collect());
                 u
             });
-            let mut cart = vec![(mapping,Vec::new())];//I hate n-ary cartesian products
+            let mut cart : Vec<(_,Vec<Option<usize>>)> = vec![(mapping,Vec::new())];//I hate n-ary cartesian products
             for (bin,brow) in biz.enumerate() {
-                let mut buf = Vec::new();
-                if brow.len()==0 {return Vec::new()}
-                for (cmap,c) in cart {
-                    'defeat: for b in brow.iter() {
-                        let mut cmcl = cmap.clone();
-                        if ex[0][bin]!=0 && *b!=0 {
-                            match &mut cmcl {
-                                None=>{
-                                    let mut hm=HashMap::new();
-                                    hm.insert(ex[0][bin],*b);
-                                    cmcl=Some(Rc::new(hm));
-                                },
-                                Some(x)=> match Rc::make_mut(x).entry(ex[0][bin]) {
-                                    Vacant(hole) => {hole.insert(*b);}
-                                    Occupied(spot) => {
-                                        if *spot.get() != *b {continue 'defeat;}
+                if let Some(brow) = brow {
+                    let mut buf = Vec::new();
+                    if brow.len()==0 {return Vec::new()}
+                    for (cmap,c) in cart {
+                        'defeat: for b in brow.iter() {
+                            let mut cmcl = cmap.clone();
+                            if *b != 0 {
+                                if let Some(bex) = ex[0][bin] {
+                                    match &mut cmcl {
+                                        None=>{
+                                            let mut hm=HashMap::new();
+                                            hm.insert(bex,*b);
+                                            cmcl=Some(Rc::new(hm));
+                                        },
+                                        Some(x)=> match Rc::make_mut(x).entry(bex) {
+                                            Vacant(hole) => {hole.insert(*b);}
+                                            Occupied(spot) => {
+                                                if *spot.get() != *b {continue 'defeat;}
+                                            }
+                                        }
                                     }
                                 }
                             }
+                            let mut cl = c.clone();
+                            cl.push(Some(*b));
+                            buf.push((cmcl,cl));
                         }
-                        let mut cl = c.clone();
-                        cl.push(*b);
-                        buf.push((cmcl,cl));
                     }
+                    cart=buf;
+                } else {
+                    for (_,c) in cart.iter_mut() {c.push(None);}
                 }
-                cart=buf;
             }
             for (mapping,value) in cart {
                 result.push(SolutionStatus {
                     dsl:dsl.clone(),size,value,mapping
                 })
             }
+        } else if a==9 {
+            let value:Vec<Option<usize>> = (0..m.len()).map(|i|{
+                ex[0][i].and_then(|z|match &builder.values[z].0 {
+                    LValue(_)=>ex[1][i],
+                    RValue(_)=>ex[2][i],
+                    _=>panic!()
+                })
+            }).collect();
+            result.push(SolutionStatus {
+                dsl,size,value,mapping
+            })
         } else {
-            let value:Vec<_> = (0..m.len()).filter_map(|i|{
-                m[i].remap.get(&(a,ex.iter().map(|x|x[i]).collect())).copied()
+            let value:Vec<Option<usize>> = (0..m.len()).map(|i|{
+                ex.iter().map(|x|x[i]).try_fold(Vec::new(),|mut acc,x|{
+                    if let Some(x)=x {
+                        acc.push(x);Some(acc)
+                    } else {None}
+                }).and_then(|z|m[i].remap.get(&(a,z))).copied()
             }).collect();
             result.push(SolutionStatus {
                 dsl,size,value,mapping
@@ -938,12 +549,14 @@ pub type NTFA = usize;
 #[derive(Default)]
 pub struct ValueMapper {
     recursion:HashMap<usize,HashSet<usize>>,
+    // truthiness:HashMap<usize,bool>,
     remap:HashMap<(usize,Vec<usize>),usize>
 }
 impl ValueMapper {
     fn new()->Self {
         ValueMapper {
             recursion:HashMap::new(),
+            // truthiness:HashMap::new(),
             remap:HashMap::new()
         }
     }
@@ -1019,7 +632,38 @@ impl InvType {
         // 10:recursion  (1)
         // 11-onwards: free space!
 
+impl NTFABuilder {
 
+    pub fn debug_is_accepting_run(&self,ntfa:usize,d:&Dsl,ex:&ExpressionBuilder)->bool {
+        let (dslf,dsla) = match d {
+            AccessStack(0)=>(1,Vec::new()),
+            Lside(a)=>(5,vec![*a.clone()]),
+            Rside(a)=>(6,vec![*a.clone()]),
+            Pair(a,b)=>(2,vec![*a.clone(),*b.clone()]),
+            BaseValue(x)=>match &ex.values[*x].0 {
+                PairValue(a,b)=>(2,vec![BaseValue(*a),BaseValue(*b)]),
+                LValue(a)=>(5,vec![BaseValue(*a)]),
+                RValue(a)=>(6,vec![BaseValue(*a)]),
+                UnitValue=>(0,Vec::new()),
+                _=>panic!()
+            },
+            SwitchValue(c,a,b)=>(9,vec![*c.clone(),*a.clone(),*b.clone()]),
+            LUndo(a)=>(7,vec![*a.clone()]),
+            RUndo(a)=>(8,vec![*a.clone()]),
+            LeftValue(a)=>(3,vec![*a.clone()]),
+            RightValue(a)=>(4,vec![*a.clone()]),
+            _=>panic!()
+        };
+        for (f,a) in self.paths[ntfa].iter() {
+            if *f==dslf {
+                if dsla.iter().zip(a.iter()).all(|(da,fa)|
+                    self.debug_is_accepting_run(*fa,da,ex)
+                ) {return true;}
+            }
+        } false
+    }
+
+}
 
 #[derive(Default)]
 pub struct PartialNTFA {
@@ -1029,6 +673,41 @@ pub struct PartialNTFA {
     vm:ValueMapper
 }
 impl PartialNTFA {
+
+    // pub fn debug_is_accepting_run(&self,d:&Dsl,ex:&ExpressionBuilder,accstates:&HashSet<usize>)->bool {
+    //     if accstates.len()==0 {return false;}
+    //     let (dslf,dsla) = match d {
+    //         AccessStack(0)=>(1,Vec::new()),
+    //         Lside(a)=>(5,vec![*a.clone()]),
+    //         Rside(a)=>(6,vec![*a.clone()]),
+    //         Pair(a,b)=>(2,vec![*a.clone(),*b.clone()]),
+    //         BaseValue(x)=>match &ex.values[*x].0 {
+    //             PairValue(a,b)=>(2,vec![BaseValue(*a),BaseValue(*b)]),
+    //             LValue(a)=>(5,vec![BaseValue(*a)]),
+    //             RValue(a)=>(6,vec![BaseValue(*a)]),
+    //             UnitValue=>(0,Vec::new()),
+    //             _=>panic!()
+    //         },
+    //         SwitchValue(c,a,b)=>(9,vec![*c.clone(),*a.clone(),*b.clone()]),
+    //         LUndo(a)=>(7,vec![*a.clone()]),
+    //         RUndo(a)=>(8,vec![*a.clone()]),
+    //         LeftValue(a)=>(3,vec![*a.clone()]),
+    //         RightValue(a)=>(4,vec![*a.clone()]),
+    //         _=>panic!()
+    //     };
+    //     for i in accstates {
+    //         for (f,a) in self.rules[i].iter() {
+    //             if *f==dslf {
+    //                 for (da,fa) in dsla.iter().zip(a.iter()) {
+    //                     let mut nstates : HashSet<usize> = HashSet::new();
+    //                     if !self.debug_is_accepting_run(&da,ex,&nstates) {return false}
+    //                 }
+    //                 // nstates.insert(a[ia]);
+    //             }
+    //         }
+    //     } false
+    // }
+
     pub fn new()->Self {PartialNTFA{rules:HashMap::new(),occurances:HashMap::new(),vm:ValueMapper::new(),maxins:0}}
     pub fn add_rule(&mut self,f:usize,a:Vec<usize>,r:usize) {
         let mut m=r;
@@ -1087,7 +766,7 @@ impl PartialNTFA {
         }
     }
     pub fn convert(self,builder:&mut NTFABuilder,ex:&ExpressionBuilder,accstates:&HashSet<usize>)->Option<(usize,ValueMapper)> {
-        #[derive(PartialEq,PartialOrd,Eq,Ord,Clone,Hash)]
+        #[derive(PartialEq,PartialOrd,Eq,Ord,Clone,Hash,Debug)]
         enum ConversionOption {
             Positive(Vec<usize>),
             Negative(Vec<usize>),
@@ -1171,6 +850,7 @@ impl PartialNTFA {
             )).flatten());}
             deps.sort_unstable();
             deps.dedup();
+            // let OLDDEPS = deps.clone();
             let mut a=0;
             while a+1<deps.len() {
                 let f = deps[a].0;
@@ -1256,7 +936,7 @@ impl PartialNTFA {
                                 if let Some(z) = deps[i..j].iter().map(|v|v.1[amt].clone()).reduce(merge).and_then(negate) {
                                     oros.push((deps[i].0,deps[i].1[..amt].iter().cloned()
                                                 .chain(once(z))
-                                                .chain(deps[i].1[amt+1..].iter().cloned()).collect()));
+                                                .chain((amt+1..deps[i].1.len()).map(|_|Anything)).collect()));
                                 }
                                 match stack.last_mut() {
                                     None=>{break 'outer;}
@@ -1275,6 +955,7 @@ impl PartialNTFA {
                 }
                 deps = oros;
             }
+            // println!("transform: {:?} => {:?}",OLDDEPS,deps);
             deps.sort_unstable();
             for (_,v) in deps.iter_mut() {
                 v.reverse();

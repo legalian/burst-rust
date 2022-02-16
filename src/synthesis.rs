@@ -72,6 +72,8 @@ pub fn synthesize(
             let mut subexpressions = extract_subexpressions(&mut exprbuilder,&states);
             let mut order = states.keys().copied().collect::<Vec<_>>();
             order.sort_unstable_by_key(|x|exprbuilder.values[*x].1);
+            let mut debug_converted = Vec::new();
+            let mut debug_intersected = Vec::new();
             for a in order {
                 println!("Evaluating one literal");
                 let (newntfa,newmapping) = match ntfabuilder.build_ntfa(
@@ -92,6 +94,7 @@ pub fn synthesize(
                         continue 'specloop
                     }
                 };
+                debug_converted.push(newntfa);
             // for (newntfa,newmapping) in vec![{
             //     let mut res = PartialNTFA::new();
             //     res.add_rule(0,vec![],1);
@@ -113,14 +116,19 @@ pub fn synthesize(
             // }.convert(&mut ntfabuilder,&{let mut h = HashSet::new();h.insert(3);h}).unwrap(),] {
 
 
-                println!("built!");
+                println!("built ntfa for: {:?}",DebugTypedValue {
+                    val:a,
+                    ty:input_type,
+                    expr:&exprbuilder
+                });
                 ntfabuilder.output_tree(newntfa);
                 tables.push(newmapping);
                 opntfa = match opntfa {
                     None=>Some(newntfa),
                     Some(oldstate)=>{
                         println!("intersecting...");
-                        if let (_,Some(intstate),_) = ntfabuilder.intersect(newntfa,oldstate) {
+                        if let Some(intstate) = ntfabuilder.intersect(newntfa,oldstate) {
+                            debug_intersected.push(intstate);
                             println!("outputting!");
                             ntfabuilder.output_tree(intstate);
                             // ntfabuilder.deplete_minification_queue();
@@ -140,6 +148,12 @@ pub fn synthesize(
             if solution_list.len()>0 {
                 for (solution,solsize,witness) in solution_list {
                     println!("PARTIAL SOLUTION FOUND: {:#?}  {:?} {:?}",EnhancedPrintDsl{dsl:&solution,expr:&exprbuilder},witness,solsize);
+                    for j in debug_converted.iter().copied() {
+                        println!("converted graph accepts? {:?}",ntfabuilder.debug_is_accepting_run(j,&solution,&exprbuilder));
+                    }
+                    for j in debug_intersected.iter().copied() {
+                        println!("intersected graph accepts? {:?}",ntfabuilder.debug_is_accepting_run(j,&solution,&exprbuilder));
+                    }
                 }
                 return;
                 // let mut yes_side = spec.clone();
