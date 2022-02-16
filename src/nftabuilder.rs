@@ -35,8 +35,8 @@ use ProcValue::{*};
 pub struct FunctionEntry {
     dsl:Rc<Dsl>,
     concval:usize,
-    argtypes:Vec<usize>,
-    restype:usize
+    pub argtypes:Vec<usize>,
+    pub restype:usize
 }
 
 pub enum Constname {
@@ -47,7 +47,7 @@ pub enum Constname {
 
 
 pub struct ExpressionBuilder {
-    functions:Vec<FunctionEntry>,
+    pub functions:Vec<FunctionEntry>,
     functionmemo:HashMap<(usize,Box<[usize]>),usize>,
     stupid_typemap:HashMap<usize,Vec<(usize,usize)>>,
     placeholderfunc:Option<usize>,
@@ -56,12 +56,12 @@ pub struct ExpressionBuilder {
     r_hashes:HashMap<usize,usize>,
     pub values:Vec<(ProcValue,usize)>,
     pair_type_hashes:HashMap<(usize,usize),usize>,
-    left_type_hashes:HashMap<usize,Vec<usize>>,
-    right_type_hashes:HashMap<usize,Vec<usize>>,
+    pub left_type_hashes:HashMap<usize,Vec<usize>>,
+    pub right_type_hashes:HashMap<usize,Vec<usize>>,
     arrow_type_hashes:HashMap<(usize,usize),usize>,
     lr_type_hashes:HashMap<(usize,usize),usize>,
-    l_type_hashes:HashMap<usize,Vec<usize>>,
-    r_type_hashes:HashMap<usize,Vec<usize>>,
+    pub l_type_hashes:HashMap<usize,Vec<usize>>,
+    pub r_type_hashes:HashMap<usize,Vec<usize>>,
     pub types:Vec<ProcType>,
     pub falseval:Option<usize>,
     pub trueval:Option<usize>,
@@ -271,7 +271,7 @@ fn compare_strictlysmaller(
 }
 
 impl NTFABuilder {
-    pub fn new(builder:&mut ExpressionBuilder)->Self {
+    pub fn new(builder:&mut ExpressionBuilder,input_type:usize,output_type:usize)->Self {
         //state space:
         // 0:uneval
         // 1:()
@@ -289,8 +289,9 @@ impl NTFABuilder {
         // 10:recursion  (1)
         // 11-onwards: free space!
         NTFABuilder {
+            input_type,output_type,
             paths:vec![
-                (0..builder.get_f_count()).rev().map(|ff|(1+ff,vec![0;builder.get_required_function_args(ff).unwrap()]))
+                (0..builder.get_f_count()).rev().map(|ff|(11+ff,vec![0;builder.get_required_function_args(ff).unwrap()]))
                 .chain(vec![
                     (10,vec![0]),
                     (9,vec![0,0,0]),
@@ -315,8 +316,8 @@ impl NTFABuilder {
     pub fn build_ntfa(
         &mut self,
         builder:&mut ExpressionBuilder,
-        input:usize,input_type:usize,
-        outputs:&HashMap<usize,BaseLiteral>,output_type:usize,
+        input:usize,
+        outputs:&HashMap<usize,BaseLiteral>,
         confirmer:&Confirmer,
         previous_accepting_states:&mut HashMap<usize,HashSet<usize>>,
         graph_buffer : &mut HashMap<usize,Option<(usize,ValueMapper)>>,
@@ -356,7 +357,7 @@ impl NTFABuilder {
         }
         let mut stack : Vec<StackElem> = vec![new_stack_elem(
             input,
-            input_type,
+            self.input_type,
             outputs
         )];
         'stackloop: while let Some(StackElem{
@@ -382,13 +383,13 @@ impl NTFABuilder {
                 if xtl.len()==0 {continue;}
                 let xtl=xtl;
                 for xt in xtl.iter() {
-                    if *xt == input_type && compare_strictlysmaller(builder,subexpressions,x,input).ok() {
-                        println!("back to the drawing board. From {:?} to {:?}",DebugTypedValue{val:input,ty:input_type,expr:builder},DebugTypedValue{val:x,ty:input_type,expr:builder});
+                    if *xt == self.input_type && compare_strictlysmaller(builder,subexpressions,x,input).ok() {
+                        println!("back to the drawing board. From {:?} to {:?}",DebugTypedValue{val:input,ty:self.input_type,expr:builder},DebugTypedValue{val:x,ty:self.input_type,expr:builder});
                         if !previous_accepting_states.contains_key(&x) {
                             queue.push(QueueElem{item:(x,xtl),priority:size});
                             stack.push(new_stack_elem(
                                 x,
-                                input_type,
+                                self.input_type,
                                 outputs
                             ));
                             continue 'stackloop;
@@ -449,13 +450,13 @@ impl NTFABuilder {
                 }
                 for xt in xtl.iter() {
                     let oua = if let Some(y) = &output {y.accepts(x)} else {true};
-                    if *xt == output_type && oua && confirmer.accepts(builder,input,x) {
+                    if *xt == self.output_type && oua && confirmer.accepts(builder,input,x) {
                         accepting_states.insert(x);
                     }
-                    if *xt == input_type && compare_strictlysmaller(builder,subexpressions,x,input).ok() {
+                    if *xt == self.input_type && compare_strictlysmaller(builder,subexpressions,x,input).ok() {
                         for bub in &previous_accepting_states[&x] {
                             res.add_rule(10,vec![x],*bub);
-                            queue.push(QueueElem{item:(*bub,vec![output_type]),priority:size+1});
+                            queue.push(QueueElem{item:(*bub,vec![self.output_type]),priority:size+1});
                         }
                     }
                     if let Some(z) = builder.stupid_typemap.get(&xt) {
@@ -554,7 +555,7 @@ impl NTFABuilder {
             // println!("{:?} resulted in: {:#?}",DebugValue{t:input,expr:builder},res);
             // println!("constructed one.");
             res.determinize();
-            graph_buffer.insert(input,res.convert(self,&accepting_states));
+            graph_buffer.insert(input,res.convert(self,builder,&accepting_states));
             previous_accepting_states.insert(input,accepting_states);
         }
         graph_buffer.remove(&input).unwrap()

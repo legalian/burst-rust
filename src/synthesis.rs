@@ -58,7 +58,7 @@ pub fn synthesize(
     input_type:usize,
     output_type:usize
 ) {
-    let mut ntfabuilder = NTFABuilder::new(&mut exprbuilder);
+    let mut ntfabuilder = NTFABuilder::new(&mut exprbuilder,input_type,output_type);
     let confirmer = spec.getconfirmer();
     let mut heap = BinaryHeap::new();
     heap.push(QueueElem{ item:spec, priority:0 });
@@ -76,8 +76,8 @@ pub fn synthesize(
                 println!("Evaluating one literal");
                 let (newntfa,newmapping) = match ntfabuilder.build_ntfa(
                     &mut exprbuilder,
-                    a,input_type,
-                    &states,output_type,
+                    a,
+                    &states,
                     &confirmer,
                     &mut accepting_states,
                     &mut graph_buffer,
