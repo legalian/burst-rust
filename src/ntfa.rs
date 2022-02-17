@@ -382,6 +382,140 @@ impl NTFABuilder {
             (a.clone(),*b,c.as_ref().map(|x|(**x).clone()).unwrap_or_default())
         }).collect()
     }
+
+
+    pub fn simplify(&mut self,accstates:Vec<usize>)->usize {
+        let mut ownership : HashMap<usize,usize> = accstates.iter().map(|x|(*x,0)).collect();
+        let mut stack : Vec<usize> = accstates.clone();
+        let mut nonaccstates : Vec<usize> = Vec::new();
+        let mut invocc : HashMap<usize,Vec<((usize,&[usize],&[usize]),usize)>> = HashMap::new();
+        while let Some(z) = stack.pop() {
+            for (f,a) in self.paths[z].iter() {
+                for (i,c) in a.iter().copied().enumerate() {
+                    if match ownership.entry(c) {
+                        Occupied(v)=>0==*v.get(),
+                        Vacant(v)=>{
+                            v.insert(1);
+                            stack.push(c);
+                            nonaccstates.push(c);
+                            true
+                        }
+                    } {
+                        invocc.entry(c).or_default().push(((*f,&a[..i],&a[i+1..]),z));
+                    }
+                }
+            }
+        }
+        if nonaccstates.len()==0 {
+            panic!("THIS CASE WILL ARISE??????????????? DONT PUT IT IN THE POOL AND LET THE ALG TERMINATE VERY QUICKLY")
+        }
+        let mut pools : Vec<(Vec<usize>,Vec<usize>)> = vec![(accstates.clone(),Vec::new()),(nonaccstates,accstates.clone())];
+        let mut hotpools : HashSet<usize> = HashSet::new();
+        hotpools.insert(0);
+        hotpools.insert(1);
+        let mut eyes : HashMap<usize,HashSet<usize>> = HashMap::new();
+        let mut hotmemo : HashMap<usize,Vec<(&(usize,&[usize],&[usize]),usize)>> = HashMap::new();
+        while hotpools.len()>0 {
+            let i = *hotpools.iter().next().unwrap();
+            fn getblh<'a,'b>(
+                invocc:&'a HashMap<usize,Vec<((usize,&'a [usize],&'a [usize]),usize)>>,
+                ownership:&'b HashMap<usize,usize>,
+                g:usize
+            )->Vec<(&'a (usize,&'a [usize],&'a [usize]),usize)> {
+                let mut blh : Vec<(&(usize,&[usize],&[usize]),usize)> = Vec::new();
+                for (key,r) in invocc.get(&g).map(|g|g.iter()).into_iter().flatten() {
+                    blh.push((key,ownership[r]));
+                }
+                blh.sort_unstable();
+                blh.dedup();
+                blh
+            }
+            fn is_superset(
+                a:&[(&(usize,&[usize],&[usize]),usize)],
+                b:&[(&(usize,&[usize],&[usize]),usize)]
+            )->bool {
+                if a.len()<b.len() {return false}
+                let mut ia=0;let mut ib=0;
+                while ia<a.len() && ib<b.len() {
+                    match a[ia].cmp(&b[ib]) {
+                        Less=>{ia+=1;}
+                        Greater=>{return false}
+                        Equal=>{ia+=1;ib+=1;}
+                    }
+                } !(ia==a.len() && ib<b.len())
+            }
+            let mut differentiator : HashMap<&[(&(usize,&[usize],&[usize]),usize)],Vec<usize>> = HashMap::new();
+            for ow in pools[i].0.iter() {
+                match hotmemo.entry(*ow) { Vacant(z)=>{z.insert(getblh(&invocc,&ownership,*ow));} _=>{} }
+            }
+            for sub in pools[i].1.iter() {
+                match hotmemo.entry(*sub) { Vacant(z)=>{z.insert(getblh(&invocc,&ownership,*sub));} _=>{} }
+            }
+            for ow in pools[i].0.iter() {
+                differentiator.entry(&hotmemo[ow]).or_default().push(*ow);
+            }
+            let mut result : Vec<_> = differentiator.into_iter().map(|(a,b)|(a,b,Vec::new())).collect();
+            for x in 0..result.len()-1 {
+                for y in x+1..result.len() {
+                    let (fst,lst) = result[x..].split_first_mut().unwrap();
+                    if is_superset(fst.0,lst[y-x-1].0) {
+                        lst[y-x-1].2.extend(fst.1.iter().copied());
+                    }
+                    if is_superset(lst[y-x-1].0,fst.0) {
+                        fst.2.extend(lst[y-x-1].1.iter().copied());
+                    }
+                }
+            }
+            for sub in pools[i].1.iter() {
+                let ghl = &hotmemo[sub];
+                for (t,_,r) in result.iter_mut() {
+                    if is_superset(ghl,t) {r.push(*sub);}
+                }
+            }
+            if result.len()>1 {
+                let ff = result.pop().unwrap();
+                pools[i].0 = ff.1;
+                pools[i].1 = ff.2;
+                for (_,v,w) in result {
+                    for k in v.iter() {
+                        ownership.insert(*k,pools.len());
+                    }
+                    hotpools.insert(pools.len());
+                    pools.push((v,w));
+                }
+                if let Some(z) = eyes.remove(&i) {
+                    for j in z {
+                        hotpools.insert(j);
+                    }
+                }
+                hotmemo.retain(|_,v|!v.iter().any(|(_,y)|*y==i));
+            } else {
+                for w in result[0].0 {
+                    eyes.entry(w.1).or_default().insert(i);
+                }
+                pools[i].1 = result.remove(0).2;
+                hotpools.remove(&i);
+            }
+        }
+
+        println!("{:?}\n",pools);
+
+        let mut stack : Vec<usize> = accstates.clone();
+        let mut dedup : HashSet<usize> = HashSet::new();
+        while let Some(z) = stack.pop() {
+            println!("{:?} := {:?}",z,self.paths[z]);
+            for (_,a) in self.paths[z].iter() {
+                for c in a.iter().copied() {
+                    if dedup.insert(c) {
+                        stack.push(c);
+                    }
+                }
+            }
+        }
+
+        panic!()
+    }
+
 }
 
 
@@ -541,10 +675,6 @@ impl SolutionStatus {
         }
         result
     }
-
-
-    
-
 
 }
 

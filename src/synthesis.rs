@@ -130,6 +130,7 @@ pub fn synthesize(
                     Some(oldstate)=>{
                         println!("intersecting...");
                         if let Some(intstate) = ntfabuilder.intersect(newntfa,oldstate) {
+                            ntfabuilder.simplify(vec![intstate]);
                             debug_intersected.push(intstate);
                             println!(" ------- outputting!");
                             // ntfabuilder.output_tree(intstate);
