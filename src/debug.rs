@@ -247,7 +247,12 @@ impl<'a> Debug for DebugTypedValue<'a> {
                             builder.field(&DebugTypedValue{val:*a,ty:*at,expr:self.expr});
                             builder.finish()
                         }
-                        _=>panic!()
+                        _=>{
+                            let mut builder = f.debug_tuple("Value_Type_Mismatch");
+                            builder.field(&DebugValue{t:self.val,expr:self.expr});
+                            builder.field(&DebugType{t:self.ty,depth:5,expr:self.expr});
+                            builder.finish()
+                        }
                     }
                     Some(mut x)=>{
                         let mut val=self.val;
@@ -346,6 +351,7 @@ pub struct EnhancedPrintDsl<'a> {
 impl<'a> Debug for EnhancedPrintDsl<'a> {
     fn fmt(&self, f: &mut Formatter) -> Result<(),Error> {
         match self.dsl {
+            RecursivePlaceholder => f.write_fmt(format_args!("RecursivePlaceholder")),
             TransferStack(a, b) => {
                 let mut builder = f.debug_tuple("TransferStack");
                 builder.field(&EnhancedPrintDsl{dsl:a,expr:self.expr});
@@ -423,6 +429,7 @@ impl<'a> Debug for EnhancedPrintDsl<'a> {
 impl Debug for Dsl {
     fn fmt(&self, f: &mut Formatter) -> Result<(),Error> {
         match self {
+            RecursivePlaceholder => f.write_fmt(format_args!("RecursivePlaceholder")),
             TransferStack(a, b) => {
                 let mut builder = f.debug_tuple("TransferStack");
                 builder.field(a);

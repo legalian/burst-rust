@@ -6,9 +6,9 @@ use std::collections::HashSet;
 use std::collections::BinaryHeap;
 use std::collections::hash_map::Entry::*;
 use std::rc::Rc;
-use std::mem::{take,replace};//,swap};
+use std::mem::{take};//,swap};
 use std::iter::{*};
-use std::iter::once;
+// use std::iter::once;
 
 use crate::dsl::{*};
 use crate::nftabuilder::{*};
@@ -19,7 +19,7 @@ use std::vec::IntoIter;
 use std::cmp::Ordering;
 use Ordering::{*};
 use Dsl::{*};
-use ProcType::{*};
+// use ProcType::{*};
 use ProcValue::{*};
 
 
@@ -92,234 +92,196 @@ pub struct NTFABuilder {
     pub paths:Vec<Vec<(usize,Vec<usize>)>>,//inner vec must be sorted
     pub revhash:HashMap<Vec<(usize,Vec<usize>)>,usize>,
     pub intersect_memo:HashMap<(usize,usize),Option<usize>>,//left side of key is less than right side
-    pub rename_memo:HashMap<(usize,Vec<usize>),usize>,
-    pub subset_memo:HashMap<(usize,usize),bool>,
+    // pub rename_memo:HashMap<(usize,Vec<usize>),usize>,
+    // pub subset_memo:HashMap<(usize,usize),bool>,
     // minification_queue:Vec<usize>,
+    pub purgeset:HashSet<usize>
 }
 
+
+
+
 impl NTFABuilder {
-    pub fn intersect(&mut self,mut a_start:usize,mut b_start:usize)->Option<usize> {
-        // println!("ENTERING INTERSECT: {} {}",a_start,b_start);
-        if a_start==b_start {return Some(a_start)}
-        if a_start==0 {return Some(b_start)}
-        if b_start==0 {return Some(a_start)}
-        let key = (min(a_start,b_start),max(a_start,b_start));
-        if let Some(early) = self.intersect_memo.get(&key) {return *early}
-        let a_start_s = a_start;
-        let b_start_s = b_start;
-        #[derive(Debug)]
-        struct OuterStack {
-            a_start:usize,b_start:usize,
-            ai:usize,bi:usize,
-            deps_ab:Vec<(usize,Vec<usize>)>,
-            innerstack:Vec<InnerStack>,
-            placeab:usize,
+    pub fn purge(&mut self,h:usize) {
+        let mut stack : Vec<usize> = vec![h];
+        while let Some(z) = stack.pop() {
+            if self.paths[z].len()==0 {panic!("purge failed!");}
+            for (_,a) in self.paths[z].iter() {
+                for c in a.iter().copied() {
+                    if self.purgeset.insert(c) {
+                        stack.push(c);
+                    }
+                }
+            }
         }
-        #[derive(Debug)]
-        struct InnerStack {
-            amt:usize,
-            alim:usize,
-            blim:usize,
-            x:usize,
-            y:usize,
-            abase:usize,
-            bbase:usize,
-            totalab:Vec<Vec<usize>>,
-            yab : Option<Vec<Vec<usize>>>
+    }
+    pub fn intersect(&mut self,a_start:usize,b_start:usize)->Option<usize> {
+        if a_start==b_start {return Some(a_start);}
+        if a_start==0 {return Some(a_start);}
+        if 0==b_start {return Some(b_start);}
+        struct ArtificialStack {
+            outercollect: Vec<(usize,Vec<usize>)>,
+            innercollect: Vec<usize>,
+            outertrav: IntoIter<(usize,Vec<(usize,usize)>)>,
+            innertrav: Vec<(usize,usize)>,
+            innertoken: usize,
+            place:usize
         }
-        let emptyr = vec![Vec::new()];
-        let mut outerstack:Vec<OuterStack>=Vec::new();
+        let mut stack:Vec<ArtificialStack> = Vec::new();
+        let outerkey = (min(a_start,b_start),max(a_start,b_start));
+        let place = match self.intersect_memo.entry(outerkey) {
+            Vacant(_) => {
+                let place = self.get_placeholder();
+                self.intersect_memo.insert(outerkey,Some(place));place
+            }
+            Occupied(z)=>{return *z.get();}
+        };
 
-        let mut ai=0;let mut bi=0;
-        let mut deps_ab = Vec::new();
-
-        let mut innerstack:Vec<InnerStack>=Vec::new();
-
-        let mut placeab = self.get_placeholder();
-        self.intersect_memo.insert(key,Some(placeab));
-        
-        'outerloop: loop {
-            let al = &self.paths[a_start];
-            let bl = &self.paths[b_start];
-            // println!("from double top");
-            // println!("begin outerloop: {:#?} astart:{} bstart:{} {:?}",outerstack,a_start,b_start,innerstack);
-            // println!("-=-=-=-=-=-=-=-");
-            'innerloop: while let Some(InnerStack{amt,alim,blim,x,y,abase,bbase,totalab,yab}) = innerstack.last_mut() {
-                // println!("innerloop: f:{},x:{},y:{}, amt:{}, yab:{:?} ",al[*abase+*x].0,*abase+*x,*bbase+*y,amt,yab);
-
-                // if *amt != TODOREMOVE-1 {
-                //     panic!()
-                // }
-                let abase=*abase;let bbase=*bbase;let amt=*amt;let alim=*alim;let blim=*blim;
-                let fl=al[abase].1.len();
-                if Some(fl)!=debug_expectedlen(al[abase].0) {panic!()}
-                // println!("from top ");
-                loop {
-                    // println!("reached point: *x:{} amt:{},y:{},yi:{}, bplen:{}, bllen:{}, compolen:{}",*x,amt,bbase+*y,*yi,bp.len(),bl.len(),bl[bbase+*y].1.len());
-                    let bp = bl[bbase+*y].1[amt];
-                    let ap = al[abase+*x].1[amt];
-                    let rw=if amt+1<fl {
-                        if let Some(y)=yab {y} else {
-                            // println!("whoa {} ({},{},{}) ({},{},{}) {:?} {:?}",amt,abase,x,alim,bbase,y,blim,al,bl);
-                            let x=*x;let y=*y;
-                            // if a_start==a_start_s && b_start==b_start_s {println!("pushing inner: x:{} y:{}, amt:{}",abase+x,bbase+y,amt+1);}
-                            innerstack.push(InnerStack {
-                                yab:None,
-                                totalab:Vec::new(),
-                                x:0,y:0,abase:abase+x,bbase:bbase+y,amt:amt+1,
-                                alim:al[abase+x..].iter().take(alim).position(|(_,v)|v[amt] != al[abase+x].1[amt]).unwrap_or(alim-x),
-                                blim:bl[bbase+y..].iter().take(blim).position(|(_,v)|v[amt] != bl[bbase+y].1[amt]).unwrap_or(blim-y)
-                            });
-                            // println!("from innerloop continue A!");
-                            continue 'innerloop;
+        fn getmergedvl(al:&[(usize,Vec<usize>)],bl:&[(usize,Vec<usize>)])->IntoIter<(usize,Vec<(usize,usize)>)> {
+            let mut a=0;
+            let mut b=0;
+            let mut ao;
+            let mut bo;
+            let mut deps = Vec::new();
+            while a<al.len() && b<bl.len() {
+                if al[a].0<bl[b].0 {a+=1;}
+                else if al[a].0>bl[b].0 {b+=1;}
+                else {
+                    let f=al[a].0;
+                    ao=0;
+                    bo=0;
+                    while a+ao<al.len() && al[a+ao].0==f {
+                        bo=0;
+                        while b+bo<bl.len() && bl[b+bo].0==f {
+                            let mut res = Vec::new();
+                            for i in 0..al[a+ao].1.len() {
+                                res.push((min(al[a+ao].1[i],bl[b+bo].1[i]),max(al[a+ao].1[i],bl[b+bo].1[i])));
+                            }
+                            deps.push((f,res));
+                            bo+=1;
                         }
-                    } else {&emptyr};
+                        ao+=1;
+                    }
+                    a+=ao;
+                    b+=bo;
+                }
+            }
+            for (_,j) in deps.iter_mut() {j.reverse();}
+            deps.into_iter()
+        }
 
-                    // if a_start==a_start_s && b_start==b_start_s {println!("doing an intersect: x:{} y:{}, amt:{}",abase+*x,bbase+*y,amt);}
-                    let xab : Option<usize> = {
-                        if ap==bp {Some(ap)}
-                        else if ap==0 {Some(bp)}
-                        else if bp==0 {Some(ap)}
-                        else {
-                            match self.intersect_memo.entry((min(ap,bp),max(ap,bp))) {
-                                Occupied(z)=>*z.get(),
-                                Vacant(_)=>{
-                                    outerstack.push(OuterStack{
-                                        a_start,b_start,
-                                        ai,bi,
-                                        deps_ab:take(&mut deps_ab),
-                                        innerstack:take(&mut innerstack),
-                                        placeab
-                                    });
-                                    ai=0;bi=0;
-                                    a_start=ap;
-                                    b_start=bp;
-                                    placeab = self.get_placeholder();
-                                    // println!("intersected: {:?} {:?} {:?}",(placeaa,placeab,placebb));
-                                    let key = (min(ap,bp),max(ap,bp));
-                                    self.intersect_memo.insert(key,Some(placeab));
-                                    // println!("pushing to outer stack new goal: {}^{} {:?} {:?}",a_start,b_start,self.paths[a_start],self.paths[b_start]);
-                                    // println!("from outerloop continue A!");
-                                    continue 'outerloop;
-                                }
+        let mut outertrav = getmergedvl(&self.paths[a_start],&self.paths[b_start]);
+        let (innertoken,intv) = match outertrav.next() {
+            Some(x)=>x,None=>{return None;}
+        };
+        // tracker.add_unconfirmed(place);
+        stack.push(ArtificialStack{
+            outercollect:Vec::new(),
+            innercollect:Vec::new(),
+            outertrav,
+            innertoken,
+            innertrav:intv,
+            place,
+        });
+        loop {
+            let x = stack.last_mut().unwrap();
+            loop {
+                if let Some(subl) = x.innertrav.pop() {
+                    match if subl.0==0 || subl.0==subl.1 {Some(Some(subl.1))}
+                        else {self.intersect_memo.get(&subl).copied()} {
+                        Some(Some(y))=>{x.innercollect.push(y);continue;}
+                        Some(None)=>{x.innercollect.clear();}
+                        None=>{
+                            let mut outertrav = getmergedvl(&self.paths[subl.0],&self.paths[subl.1]);
+                            if let Some((innertoken,intv)) = outertrav.next() {
+                                let place = self.get_placeholder();
+                                self.intersect_memo.insert(subl.clone(),Some(place));
+                                x.innertrav.push(subl);
+                                // tracker.add_unconfirmed(place);
+                                stack.push(ArtificialStack{
+                                    outercollect:Vec::new(),
+                                    innercollect:Vec::new(),
+                                    outertrav,
+                                    innertoken,
+                                    innertrav:intv,
+                                    place,
+                                });
+                                break;
+                            } else {x.innercollect.clear();}
+                        }
+                    }
+                } else {
+                    let v = take(&mut x.innercollect);
+                    x.outercollect.push((x.innertoken,v));
+                }
+                if let Some((innertoken,intv))=x.outertrav.next() {
+                    x.innertoken=innertoken;
+                    x.innertrav=intv;
+                } else {
+                    let ff = stack.pop().unwrap();
+                    // tracker.depends_on(ff.place,&ff.outercollect);
+                    let rpv = if ff.outercollect.len()==0 {None} else {Some(self.insert_into_placeholder(ff.outercollect,ff.place))};
+                    match stack.last() {
+                        Some(x)=>{
+                            if rpv != Some(ff.place) {
+                                // tracker.forget(ff.place);
+                                let fl = *x.innertrav.last().unwrap();
+                                self.intersect_memo.insert(fl,rpv);//harmlessly replace old value
                             }
                         }
-                    };
-                    if let Some(z) = xab {
-                        for rz in rw.iter() {
-                            let mut we = rz.clone();
-                            we.insert(0,z);
-                            totalab.push(we);
+                        None=>{
+                            if rpv != Some(ff.place) {
+                                // tracker.forget(ff.place);
+                                // let fl = x.innertrav.last().unwrap();
+                                self.intersect_memo.insert(outerkey,rpv);//harmlessly replace old value
+                            }
+                            // let rpv = tracker.kill_unused_and_report(rpv,self);
+                            return rpv
                         }
                     }
-                    *yab=None;
-                    let oy=&bl[bbase+*y].1[amt];*y+=1;
-                    // println!("{:?} {:?} {:?}",bbase+*y,bbase+blim,bl);
-                    while *y<blim && bl[bbase+*y].1[amt]==*oy {*y+=1;}
-                    if *y>=blim {
-                        let ox=&al[abase+*x].1[amt];*x+=1;
-                        while *x<alim && al[abase+*x].1[amt]==*ox {*x+=1;}
-                        if *x>=alim {break;}
-                        *y=0;
-                    }
+                    break;
                 }
-
-                let ff = innerstack.pop().unwrap();
-                match innerstack.last_mut() {
-                    Some(o)=>{
-                        o.yab = Some(ff.totalab);
-                    }
-                    None=>{
-                        let f=al[ai].0;
-                        for j in ff.totalab {deps_ab.push((f,j));}
-                        ai+=ff.alim;
-                        bi+=ff.blim;
-                        break;
-                    }
-                }
-            }
-            while ai<al.len() && bi<bl.len() {
-                if al[ai].0<bl[bi].0 {ai+=1;}
-                else if al[ai].0>bl[bi].0 {bi+=1;}
-                else {
-                    let f=al[ai].0;
-                    if al[ai].1.len()==0 {
-                        deps_ab.push((f,Vec::new()));
-                        ai+=1;
-                        bi+=1;
-                    } else {
-                        let alim=al[ai..].iter().position(|(f2,_)|*f2 != f).unwrap_or(al.len()-ai);
-                        let blim=bl[bi..].iter().position(|(f2,_)|*f2 != f).unwrap_or(bl.len()-bi);
-                        innerstack.push(InnerStack{
-                            amt:0,alim,blim,
-                            x:0,
-                            y:0,
-                            abase:ai,
-                            bbase:bi,
-                            totalab:Vec::new(),
-                            yab:None,
-                        });
-                        continue 'outerloop;
-                    }
-                }
-            }
-
-            let rpvab = if deps_ab.len()==0 {None} else {Some(self.insert_into_placeholder(deps_ab,placeab))};
-            
-            if let Some(o) = outerstack.pop() {
-                a_start=o.a_start;b_start=o.b_start;
-                ai=o.ai;bi=o.bi;
-                deps_ab=o.deps_ab;
-                innerstack=o.innerstack;
-                placeab=o.placeab;
-                if rpvab != Some(placeab) {
-                    let j = innerstack.last_mut().unwrap();
-
-                    let r_key_a = self.paths[a_start][j.abase+j.x].1[j.amt];
-                    let r_key_b = self.paths[b_start][j.bbase+j.y].1[j.amt];
-                    self.intersect_memo.insert((min(r_key_a,r_key_b),max(r_key_a,r_key_b)),rpvab);//harmlessly replace old value
-                }
-            } else {
-                if rpvab != Some(placeab) {
-                    self.intersect_memo.insert((min(a_start_s,b_start_s),max(a_start_s,b_start_s)),rpvab);//harmlessly replace old value
-                }
-                return rpvab;
             }
         }
     }
 
     fn get_ntfa(&mut self,deps:Vec<(usize,Vec<usize>)>)->usize {
-        match self.revhash.entry(deps) {
-            Occupied(x)=>*x.get(),
-            Vacant(x)=>{
-                let i=self.paths.len();
-                // if NTFABuilder::check_requires_further(x.key()) {
-                //     self.minification_queue.push(i);
-                // }
-                self.paths.push(x.key().clone());
-                x.insert(i); i
-            }
-        }
+        if deps.len()==0 {panic!()}
+        // match self.revhash.entry(deps) {
+        //     Occupied(x)=>*x.get(),
+        //     Vacant(x)=>{
+        //         let i=self.paths.len();
+        //         // if NTFABuilder::check_requires_further(x.key()) {
+        //         //     self.minification_queue.push(i);
+        //         // }
+        //         self.paths.push(x.key().clone());
+        //         x.insert(i); i
+        //     }
+        // }
+        let i=self.paths.len();
+        self.paths.push(deps); i
     }
 
     fn get_placeholder(&mut self)->usize {
-        self.paths.push(vec![]);
+        self.paths.push(Vec::new());
         self.paths.len()-1
     }
 
     fn insert_into_placeholder(&mut self,mut deps:Vec<(usize,Vec<usize>)>,i:usize)->usize {
+        if deps.len()==0 {panic!()}
         deps.sort_unstable();
         deps.dedup();
-        match self.revhash.entry(deps) {
-            Occupied(x)=>*x.get(),//release i back to the cluster...
-            Vacant(x)=>{
-                // if NTFABuilder::check_requires_further(x.key()) {
-                //     self.minification_queue.push(i);
-                // }
-                self.paths[i]=x.key().clone();
-                x.insert(i); i
-            }
-        }
+        // match self.revhash.entry(deps) {
+        //     Occupied(x)=>*x.get(),//release i back to the cluster...
+        //     Vacant(x)=>{
+        //         // if NTFABuilder::check_requires_further(x.key()) {
+        //         //     self.minification_queue.push(i);
+        //         // }
+        //         self.paths[i]=x.key().clone();
+        //         x.insert(i); i
+        //     }
+        // }
+        self.paths[i]=deps; i
     }
 
     pub fn get_accepting_run(
@@ -384,7 +346,17 @@ impl NTFABuilder {
     }
 
 
-    pub fn simplify(&mut self,accstates:Vec<usize>)->usize {
+    pub fn simplify(&mut self,accstates:Vec<usize>)->Option<usize> {
+
+        // self.purge(a_start);
+        // if accstates.len()==0 {return None}
+        // if accstates.len()==1 {return Some(accstates[0])}
+        // panic!();
+        // let mut deps:Vec<(usize,Vec<usize>)> = Vec::new();
+        // for s in accstates {deps.extend(self.paths[s].iter().cloned())}
+        // return Some(self.get_ntfa(deps));
+
+        if accstates.len()==0 {return None}
         let mut ownership : HashMap<usize,usize> = accstates.iter().map(|x|(*x,0)).collect();
         let mut stack : Vec<usize> = accstates.clone();
         let mut nonaccstates : Vec<usize> = Vec::new();
@@ -406,13 +378,14 @@ impl NTFABuilder {
                 }
             }
         }
-        if nonaccstates.len()==0 {
-            panic!("THIS CASE WILL ARISE??????????????? DONT PUT IT IN THE POOL AND LET THE ALG TERMINATE VERY QUICKLY")
-        }
-        let mut pools : Vec<(Vec<usize>,Vec<usize>)> = vec![(accstates.clone(),Vec::new()),(nonaccstates,accstates.clone())];
         let mut hotpools : HashSet<usize> = HashSet::new();
         hotpools.insert(0);
-        hotpools.insert(1);
+        let mut pools : Vec<(Vec<usize>,Vec<usize>)> = if nonaccstates.len()==0 {
+            vec![(accstates.clone(),Vec::new())]
+        } else {
+            hotpools.insert(1);
+            vec![(accstates.clone(),Vec::new()),(nonaccstates,accstates.clone())]
+        };
         let mut eyes : HashMap<usize,HashSet<usize>> = HashMap::new();
         let mut hotmemo : HashMap<usize,Vec<(&(usize,&[usize],&[usize]),usize)>> = HashMap::new();
         while hotpools.len()>0 {
@@ -498,22 +471,195 @@ impl NTFABuilder {
             }
         }
 
-        println!("{:?}\n",pools);
+        // println!("\n\n{:?}\n{:?}\n\n",pools,ownership);
 
-        let mut stack : Vec<usize> = accstates.clone();
-        let mut dedup : HashSet<usize> = HashSet::new();
-        while let Some(z) = stack.pop() {
-            println!("{:?} := {:?}",z,self.paths[z]);
-            for (_,a) in self.paths[z].iter() {
-                for c in a.iter().copied() {
-                    if dedup.insert(c) {
-                        stack.push(c);
+        // let mut stack : Vec<usize> = accstates.clone();
+        // let mut dedup : HashSet<usize> = HashSet::new();
+        // while let Some(z) = stack.pop() {
+        //     println!("{:?} := {:?}",z,self.paths[z]);
+        //     for (_,a) in self.paths[z].iter() {
+        //         for c in a.iter().copied() {
+        //             if dedup.insert(c) {
+        //                 stack.push(c);
+        //             }
+        //         }
+        //     }
+        // }
+        let mut hs = HashSet::new();
+        let mut oup = Vec::new();
+        for b in accstates {
+            if hs.insert(b) {
+                let own = ownership[&b];
+                oup.push(own);
+                hs.extend(pools[own].0.iter().copied());
+                hs.extend(pools[own].1.iter().copied());
+            }
+        }
+        if pools.iter().all(|(a,b)|a.len()==1&&b.len()==0) {
+            if oup.len()==1 {return Some(pools[oup[0]].0[0])}
+            let mut deps:Vec<(usize,Vec<usize>)> = Vec::new();
+            for s in oup {deps.extend(self.paths[pools[s].0[0]].iter().cloned())}
+            return Some(self.get_ntfa(deps));
+        }
+
+        fn getmergedvl(
+            sel:&NTFABuilder,
+            item:usize,
+            pools:&Vec<(Vec<usize>,Vec<usize>)>,
+            ownership:&HashMap<usize,usize>
+        )->IntoIter<(usize,Vec<usize>)> {
+            let mut deps:Vec<(usize,Vec<usize>)> = Vec::new();
+            for s in pools[item].0.iter().copied() {deps.extend(sel.paths[s].iter().cloned())}
+            for s in pools[item].1.iter().copied() {deps.extend(sel.paths[s].iter().cloned())}
+            deps.sort_unstable();
+            deps.dedup();
+            // println!("deps len: {:?} {:?} {:?}",deps.len(),pools[item].0.len(),pools[item].1.len());
+            let mut a=0;
+            // let OLDDEPS = deps.clone();
+            while a<deps.len() {
+                let f = deps[a].0;
+                let l = deps[a].1.len();
+                let mut b=1;
+                while a+b<deps.len() && deps[a+b].0==f {
+                    b+=1;
+                }
+                // if f==9 {println!("deps before after: {:?} {:?} {:?}",deps,a,b)}
+                for amt in 0..l {
+                    let mut x=0;
+                    let mut partition=b;
+                    while x<partition {
+                        let mut y = x;
+                        let mut collect:Vec<usize> = Vec::new();
+                        let mut hs = HashSet::new();
+                        while y<partition {
+                            if (0..l).all(|a2|a2==amt || deps[a+x].1[a2]==deps[a+y].1[a2]) {
+                                if hs.insert(b) {
+                                    let own = ownership[&deps[a+y].1[amt]];
+                                    collect.push(own);
+                                    hs.extend(pools[own].0.iter().copied());
+                                    hs.extend(pools[own].1.iter().copied());
+                                }
+                                if y!=x {
+                                    deps.remove(a+y);
+                                    // if f==9 {println!("5 removal??! {:?}",RMRMRM);}
+                                    b-=1;
+                                    partition-=1;
+                                } else {y+=1}
+                            } else {y+=1;}
+                        }
+                        deps[a+x].1[amt]=collect.pop().unwrap();
+                        for col in collect {
+                            let mut cr = deps[a+x].clone();
+                            cr.1[amt] = col;
+                            deps.insert(a+partition,cr);
+                            b+=1;
+                        }
+                        x+=1;
+                    }
+
+                }
+                // if f==9 {println!("deps snapshot after: {:?} {:?} {:?}",deps,a,b)}
+                a+=b;
+            }
+            // println!("transform: {:?} => {:?}",OLDDEPS,deps);
+            deps.sort_unstable();
+            for (_,v) in deps.iter_mut() {
+                v.reverse();
+            }
+            deps.into_iter()
+        }
+        struct ArtificialStack {
+            outercollect: Vec<(usize,Vec<usize>)>,
+            innercollect: Vec<usize>,
+            outertrav: IntoIter<(usize,Vec<usize>)>,
+            innertrav: Vec<usize>,
+            innertoken: usize,
+            place: usize,
+        }
+        let mut memo:HashMap<usize,usize> = HashMap::new();
+        let mut result = Vec::new();
+        for own in oup {
+            let mut stack:Vec<ArtificialStack> = Vec::new();
+            let place = match memo.entry(own) {
+                Occupied(z)=>{
+                    result.push(*z.get());
+                    continue;
+                }
+                Vacant(z)=>{
+                    let place = self.get_placeholder();
+                    *z.insert(place)
+                }
+            };
+            let mut outertrav = getmergedvl(self,own,&pools,&ownership);
+            let (innertoken,intv) = outertrav.next().unwrap();
+            stack.push(ArtificialStack{
+                outercollect:Vec::new(),
+                innercollect:Vec::new(),
+                outertrav,
+                innertoken,
+                innertrav:intv,
+                place,
+            });
+            //unevaluated gets cloned into a state besides unevaluated.
+            while stack.len()>0 {
+                let x = stack.last_mut().unwrap();
+                loop {
+                    if let Some(subl) = x.innertrav.pop() {
+                        match if pools[subl].0.contains(&0) {Some(0)} else {memo.get(&subl).copied()} {
+                            Some(y)=>{x.innercollect.push(y);continue;}
+                            None=>{
+                                let mut outertrav = getmergedvl(self,subl,&pools,&ownership);
+                                if let Some((innertoken,intv)) = outertrav.next() {
+                                    let place = self.get_placeholder();
+                                    memo.insert(subl,place);
+                                    x.innertrav.push(subl);
+                                    stack.push(ArtificialStack{
+                                        outercollect:Vec::new(),
+                                        innercollect:Vec::new(),
+                                        outertrav,
+                                        innertoken,
+                                        innertrav:intv,
+                                        place,
+                                    });
+                                    break;
+                                } else {x.innercollect.clear();}
+                            }
+                        }
+                    } else {
+                        let v = take(&mut x.innercollect);
+                        x.outercollect.push((x.innertoken,v));
+                    }
+                    if let Some((innertoken,intv))=x.outertrav.next() {
+                        x.innertoken=innertoken;
+                        x.innertrav=intv;
+                    } else {
+                        let ff = stack.pop().unwrap();
+                        let rpv = if ff.outercollect.len()==0 {panic!()} else {self.insert_into_placeholder(ff.outercollect,ff.place)};
+                        match stack.last() {
+                            Some(x)=>{
+                                if rpv != ff.place {
+                                    let fl = *x.innertrav.last().unwrap();
+                                    memo.insert(fl,rpv);//harmlessly replace old value
+                                }
+                            }
+                            None=>{
+                                if rpv != ff.place {
+                                    memo.insert(own,rpv);//harmlessly replace old value
+                                }
+                                result.push(rpv);
+                            }
+                        }
+                        break;
                     }
                 }
             }
         }
-
-        panic!()
+        // panic!();
+        if result.len()==0 {return None}
+        if result.len()==1 {return Some(result[0])}
+        let mut deps:Vec<(usize,Vec<usize>)> = Vec::new();
+        for s in result {deps.extend(self.paths[s].iter().cloned())}
+        return Some(self.get_ntfa(deps));
     }
 
 }
@@ -655,7 +801,7 @@ impl SolutionStatus {
                 ex[0][i].and_then(|z|match &builder.values[z].0 {
                     LValue(_)=>ex[1][i],
                     RValue(_)=>ex[2][i],
-                    _=>panic!()
+                    _=>None
                 })
             }).collect();
             result.push(SolutionStatus {
@@ -697,57 +843,57 @@ impl ValueMapper {
     }
 }
 
-#[derive(Clone,PartialOrd,PartialEq,Ord,Eq,Hash)]
-pub enum InvType {
-    BaseType(usize),
-    FstType(Box<InvType>),
-    SndType(Box<InvType>),
-    LType(Box<InvType>),
-    RType(Box<InvType>),
-    SomeLR,
-    Unknown
-}
-use InvType::{*};
-impl InvType {
-    fn canbe(&self,token:usize,builder:&ExpressionBuilder)->bool {
-        match (self,&builder.types[token]) {
-            (Unknown,_)=>true,
-            (SomeLR,PairType(_,_))=>true,
-            (SomeLR,_)=>false,
-            (BaseType(i),_)=>*i==token,
-            (FstType(i),PairType(a,_))=>i.canbe(*a,builder),
-            (SndType(i),PairType(_,a))=>i.canbe(*a,builder),
-            (LType(i),LRType(a,_))=>i.canbe(*a,builder),
-            (RType(i),LRType(_,a))=>i.canbe(*a,builder),
-            _=>false
-        }
-    }
-    fn over(&self,token:usize,index:usize,builder:&NTFABuilder,ex:&ExpressionBuilder)->InvType {
-        match (self,token,index) {
-            (_,9,0)=>SomeLR,
-            (x,9,1|2)=>x.clone(),
-            (FstType(x),2,0)=>*x.clone(),
-            (FstType(_),2,1)=>Unknown,
-            (SndType(_),2,0)=>Unknown,
-            (SndType(x),2,1)=>*x.clone(),
-            (BaseType(x),2,0)=>BaseType(match &ex.types[*x] {PairType(a,_)=>*a,_=>{panic!()}}),
-            (BaseType(x),2,1)=>BaseType(match &ex.types[*x] {PairType(_,a)=>*a,_=>{panic!()}}),
-            (SomeLR,5,0)=>Unknown,
-            (SomeLR,6,0)=>Unknown,
-            (LType(x),5,0)=>*x.clone(),
-            (RType(x),6,0)=>*x.clone(),
-            (BaseType(x),5,0)=>BaseType(match &ex.types[*x] {LRType(a,_)=>*a,_=>{panic!()}}),
-            (BaseType(x),6,0)=>BaseType(match &ex.types[*x] {LRType(_,a)=>*a,_=>{panic!()}}),
-            (x,3,0)=>FstType(Box::new(x.clone())),
-            (x,4,0)=>SndType(Box::new(x.clone())),
-            (x,7,0)=>LType(Box::new(x.clone())),
-            (x,8,0)=>RType(Box::new(x.clone())),
-            (_,10,0)=>BaseType(builder.input_type),
-            (Unknown,w,_) if w<11 =>Unknown,
-            (_,w,a)=>BaseType(ex.functions[w-11].argtypes[a])
-        }
-    }
-}
+// #[derive(Clone,PartialOrd,PartialEq,Ord,Eq,Hash)]
+// pub enum InvType {
+//     BaseType(usize),
+//     FstType(Box<InvType>),
+//     SndType(Box<InvType>),
+//     LType(Box<InvType>),
+//     RType(Box<InvType>),
+//     SomeLR,
+//     Unknown
+// }
+// use InvType::{*};
+// impl InvType {
+//     fn canbe(&self,token:usize,builder:&ExpressionBuilder)->bool {
+//         match (self,&builder.types[token]) {
+//             (Unknown,_)=>true,
+//             (SomeLR,PairType(_,_))=>true,
+//             (SomeLR,_)=>false,
+//             (BaseType(i),_)=>*i==token,
+//             (FstType(i),PairType(a,_))=>i.canbe(*a,builder),
+//             (SndType(i),PairType(_,a))=>i.canbe(*a,builder),
+//             (LType(i),LRType(a,_))=>i.canbe(*a,builder),
+//             (RType(i),LRType(_,a))=>i.canbe(*a,builder),
+//             _=>false
+//         }
+//     }
+//     fn over(&self,token:usize,index:usize,builder:&NTFABuilder,ex:&ExpressionBuilder)->InvType {
+//         match (self,token,index) {
+//             (_,9,0)=>SomeLR,
+//             (x,9,1|2)=>x.clone(),
+//             (FstType(x),2,0)=>*x.clone(),
+//             (FstType(_),2,1)=>Unknown,
+//             (SndType(_),2,0)=>Unknown,
+//             (SndType(x),2,1)=>*x.clone(),
+//             (BaseType(x),2,0)=>BaseType(match &ex.types[*x] {PairType(a,_)=>*a,_=>{panic!()}}),
+//             (BaseType(x),2,1)=>BaseType(match &ex.types[*x] {PairType(_,a)=>*a,_=>{panic!()}}),
+//             (SomeLR,5,0)=>Unknown,
+//             (SomeLR,6,0)=>Unknown,
+//             (LType(x),5,0)=>*x.clone(),
+//             (RType(x),6,0)=>*x.clone(),
+//             (BaseType(x),5,0)=>BaseType(match &ex.types[*x] {LRType(a,_)=>*a,_=>{panic!()}}),
+//             (BaseType(x),6,0)=>BaseType(match &ex.types[*x] {LRType(_,a)=>*a,_=>{panic!()}}),
+//             (x,3,0)=>FstType(Box::new(x.clone())),
+//             (x,4,0)=>SndType(Box::new(x.clone())),
+//             (x,7,0)=>LType(Box::new(x.clone())),
+//             (x,8,0)=>RType(Box::new(x.clone())),
+//             (_,10,0)=>BaseType(builder.input_type),
+//             (Unknown,w,_) if w<11 =>Unknown,
+//             (_,w,a)=>BaseType(ex.functions[w-11].argtypes[a])
+//         }
+//     }
+// }
 
         // 0:unit        (0)
         // 1:input       (0)
@@ -919,286 +1065,405 @@ impl PartialNTFA {
             stack.extend(conflictcheck.into_iter().filter(|(_,b)|b.len()>=2));
         }
     }
-    pub fn convert(self,builder:&mut NTFABuilder,ex:&ExpressionBuilder,accstates:&HashSet<usize>)->Option<(usize,ValueMapper)> {
-        #[derive(PartialEq,PartialOrd,Eq,Ord,Clone,Hash,Debug)]
-        enum ConversionOption {
-            Positive(Vec<usize>),
-            Negative(Vec<usize>),
-            Anything
-        }
-        use ConversionOption::{*};
-        fn merge(a:ConversionOption,b:ConversionOption)->ConversionOption {
-            match (a,b) {
-                (Anything,_)|(_,Anything)=>Anything,
-                (Positive(a),Positive(b))=>Positive(dedup_merge(a,b)),
-                (Negative(a),Negative(b))=>Negative({
-                    let j = dedup_intersect(a,b);
-                    if j.len()==0 {return Anything} else {j}
-                }),
-                (Positive(a),Negative(b))|(Negative(b),Positive(a))=>Negative({
-                    let j = dedup_setminus(b,a);
-                    if j.len()==0 {return Anything} else {j}
-                })
-            }
-        }
-        fn negate(a:ConversionOption)->Option<ConversionOption> {
-            match a {
-                Positive(a)=>Some(Negative(a)),
-                Negative(a)=>Some(Positive(a)),
-                Anything=>None
-            }
-        }
-        fn get_inversion_ledger(builder:&NTFABuilder,ex:&ExpressionBuilder,typeset:&InvType)->Vec<(usize,usize)> {
-            let mut oros : Vec<(usize,usize)> = vec![(3,1),(4,1),(7,1),(8,1),(9,3)];
-            if typeset.canbe(builder.output_type,ex) {oros.push((10,1));}
-            oros.extend(
-                (0..ex.get_f_count()).filter_map(|ff|{
-                    let FunctionEntry {argtypes,restype,..} = &ex.functions[ff];
-                    if typeset.canbe(*restype,ex) {
-                        Some((11+ff,argtypes.len()))
-                    } else {None}
-                })
-            );
-            if typeset.canbe(builder.input_type,ex) {oros.push((1,0));}
-            if typeset.canbe(0,ex) {oros.push((0,0));}
-            match &typeset {
-                Unknown=>{oros.push((2,2));}
-                BaseType(x)=>match &ex.types[*x] {
-                    PairType(_,_)=>{oros.push((2,2));}
-                    _=>{}
-                }
-                FstType(_)=>{oros.push((2,2));}
-                SndType(_)=>{oros.push((2,2));}
-                _=>{}
-            }
-            match &typeset {
-                SomeLR|Unknown=>{
-                    oros.push((5,1));
-                    oros.push((6,1));
-                }
-                BaseType(x)=>match &ex.types[*x] {
-                    LRType(_,_)=>{
-                        oros.push((5,1));
-                        oros.push((6,1));
-                    }
-                    _=>{}
-                }
-                LType(_)=>{oros.push((5,1));}
-                RType(_)=>{oros.push((6,1));}
-                _=>{}
-            }
-            oros.sort_unstable();
-            oros
-        }
-        fn getmergedvl<T:Iterator<Item=usize>>(
-            sel:&PartialNTFA,
-            builder:&NTFABuilder,
-            ex:&ExpressionBuilder,
-            ind:T,
-            negative:bool,
-            typeset:&InvType
-        )->IntoIter<(usize,Vec<ConversionOption>)> {
-            let mut deps:Vec<(usize,Vec<ConversionOption>)> = Vec::new();
-            for s in ind {deps.extend(sel.rules.get(&s).into_iter().map(|ii|ii.iter().map(|(f,a)|
-                (*f,a.iter().map(|x|if *x==0 {Anything} else {Positive(vec![*x])}).collect())
-            )).flatten());}
-            deps.sort_unstable();
-            deps.dedup();
-            // let OLDDEPS = deps.clone();
-            let mut a=0;
-            while a+1<deps.len() {
-                let f = deps[a].0;
-                let l = deps[a].1.len();
-                let mut b=1;
-                while deps[a+b].0==f {
-                    b+=1;
-                    if a+b>=deps.len() {break;}
-                }
-                for x in 0..b-1 {
-                    let mut y=x+1;
-                    while y<b {
-                        if (0..l).all(|a2|deps[a+x].1[a2]==deps[a+y].1[a2] || deps[a+x].1[a2]==Anything || deps[a+y].1[a2]==Anything) {
-                            let depr = take(&mut deps.remove(a+y).1);
-                            for (rr,kk) in deps[a+x].1.iter_mut().zip(depr.into_iter()) {
-                                if kk==Anything {*rr=Anything;}
-                            }
-                            b-=1;
-                        } else {
-                            y+=1;
-                        }
-                    }
-                }
-                if b != 1 {
-                    for amt in 0..l {
-                        let mut x=0;
-                        while x<b {
-                            if if let Anything = deps[a+x].1[amt] {
-                                let mut ooc = Vec::new();
-                                for y in 0..b {
-                                    if let Positive(k) = &deps[a+y].1[amt] {
-                                        if (0..amt).all(|i|deps[a+y].1[i]==deps[a+x].1[i]) {
-                                            ooc.push(k[0]);
-                                        }
-                                    }
-                                }
-                                if ooc.len()>0 {
-                                    let mut rag = deps[a+x].clone();
-                                    rag.1[amt]=Negative(ooc.clone());
-                                    deps[a+x].1[amt]=Positive(ooc);
-                                    deps.insert(a+x+1,rag);
-                                    b+=1;false
-                                } else {true}
-                            } else {true} {
-                                let mut y = x+1;
-                                while y<b {
-                                    if (0..l).all(|a2|a2==amt || deps[a+x].1[a2]==deps[a+y].1[a2]) {
-                                        let depr = replace(&mut deps.remove(a+y).1[amt],Anything);
-                                        deps[a+x].1[amt] = merge(replace(&mut deps[a+x].1[amt],Anything),depr);
-                                        b-=1;
-                                    } else {
-                                        y+=1;
-                                    }
-                                }
-                                x+=1;
-                            }
-                        }
-                    }
-                }
-                a+=b;
-            }
-            if negative {
-                let mut i=0;
-                let mut oros : Vec<(usize,Vec<ConversionOption>)> = Vec::new();
-                for (kf,kt) in get_inversion_ledger(builder,ex,typeset) {
-                    while i<deps.len() && deps[i].0>kf {i+=1}
-                    if i>=deps.len() {
-                        oros.push((kf,(0..kt).map(|_|Anything).collect()));
-                        continue;
-                    }
-                    if kt==0 {i+=1;continue;}
-                    let mut j = i+1;
-                    while j<deps.len() && deps[i].0==deps[j].0 {j+=1;}
-                    let mut stack = vec![(i,j)];
-                    'outer: while let Some((i,j))=stack.last().copied() {
-                        let amt = stack.len()-1;
-                        if amt==deps[i].1.len() {
-                            loop {
-                                let (i,j) = stack.pop().unwrap();
-                                let amt = stack.len()-1;
-                                if let Some(z) = deps[i..j].iter().map(|v|v.1[amt].clone()).reduce(merge).and_then(negate) {
-                                    oros.push((deps[i].0,deps[i].1[..amt].iter().cloned()
-                                                .chain(once(z))
-                                                .chain((amt+1..deps[i].1.len()).map(|_|Anything)).collect()));
-                                }
-                                match stack.last_mut() {
-                                    None=>{break 'outer;}
-                                    Some((ip,jp))=>{
-                                        if *jp==j {continue}
-                                        *ip=j;continue 'outer;
-                                    }
-                                }
-                            }
-                        }
-                        let mut k=i+1;
-                        while k<j && deps[i].1[amt]==deps[k].1[amt] {k+=1;}
-                        stack.push((i,k));
-                    }
-                    i=j;
-                }
-                deps = oros;
-            }
-            // println!("transform: {:?} => {:?}",OLDDEPS,deps);
-            deps.sort_unstable();
-            for (_,v) in deps.iter_mut() {
-                v.reverse();
-            }
-            deps.into_iter()
-        }
-        if accstates.len()==0 {return None}
+    pub fn convert(self,builder:&mut NTFABuilder,accstates:&Vec<usize>)->(Vec<usize>,ValueMapper) {
+        #[derive(Debug)]
         struct ArtificialStack {
             outercollect: Vec<(usize,Vec<usize>)>,
             innercollect: Vec<usize>,
-            outertrav: IntoIter<(usize,Vec<ConversionOption>)>,
-            innertrav: Vec<ConversionOption>,
+            outertrav: IntoIter<(usize,Vec<usize>)>,
+            innertrav: Vec<usize>,
             innertoken: usize,
+            // target: usize,
             place: usize,
-            types: InvType
+            // types: InvType
         }
-        let mut stack:Vec<ArtificialStack> = Vec::new();
-        let mut memo:HashMap<ConversionOption,Option<usize>> = HashMap::new();
-        memo.insert(Anything,Some(0));
-
-        let mut snok = accstates.iter().copied().collect::<Vec<_>>();
-        snok.sort_unstable();
-
-        let place = builder.get_placeholder();
-        memo.insert(Positive(snok.clone()),Some(place));
-        let intype = BaseType(builder.output_type);
-        let mut outertrav = getmergedvl(&self,builder,ex,accstates.iter().copied(),false,&intype);
-        let (innertoken,intv) = outertrav.next().unwrap();
-        stack.push(ArtificialStack{
-            outercollect:Vec::new(),
-            innercollect:Vec::new(),
-            outertrav,
-            innertoken,
-            innertrav:intv,
-            place,
-            types: intype
-        });
-        loop {
-            let x = stack.last_mut().unwrap();
-            loop {
-                if let Some(subl) = x.innertrav.pop() {
-                    match memo.get(&subl).copied() {
-                        Some(Some(y))=>{x.innercollect.push(y);continue;}
-                        Some(None)=>{x.innercollect.clear();}
-                        None=>{
-                            let (inn,neg) = match &subl {Anything=>panic!(),Positive(inn)=>(inn,false),Negative(inn)=>(inn,true)};
-                            let mut outertrav = getmergedvl(&self,builder,ex,inn.iter().copied(),neg,&x.types);
-                            if let Some((innertoken,intv)) = outertrav.next() {
-                                let place = builder.get_placeholder();
-                                memo.insert(subl.clone(),Some(place));
-                                x.innertrav.push(subl);
-                                let nn = x.types.over(x.innertoken,x.innercollect.len(),builder,ex);
-                                stack.push(ArtificialStack{
-                                    outercollect:Vec::new(),
-                                    innercollect:Vec::new(),
-                                    outertrav,
-                                    innertoken,
-                                    innertrav:intv,
-                                    place,
-                                    types:nn
-                                });
-                                break;
-                            } else {x.innercollect.clear();}
-                        }
+        let mut memo:HashMap<usize,Option<usize>> = HashMap::new();
+        memo.insert(0,Some(0));
+        let mut result = Vec::new();
+        for accstate in accstates.iter().copied() {
+            // println!("STATE BOUNDARY -=-=-=-=--=-=-=-=-=-=-=-=-=-=-=");
+            let mut stack:Vec<ArtificialStack> = Vec::new();
+            let place = match memo.entry(accstate) {
+                Occupied(z)=>{
+                    if let Some(w) = *z.get() {
+                        result.push(w);
                     }
-                } else {
-                    let v = take(&mut x.innercollect);
-                    x.outercollect.push((x.innertoken,v));
+                    continue;
                 }
-                if let Some((innertoken,intv))=x.outertrav.next() {
-                    x.innertoken=innertoken;
-                    x.innertrav=intv;
-                } else {
-                    let ff = stack.pop().unwrap();
-                    let rpv = if ff.outercollect.len()==0 {None} else {Some(builder.insert_into_placeholder(ff.outercollect,ff.place))};
-                    match stack.last() {
-                        Some(x)=>{
-                            if rpv != Some(ff.place) {
-                                let fl = x.innertrav.last().unwrap();
-                                memo.insert(fl.clone(),rpv);//harmlessly replace old value
+                Vacant(z)=>{
+                    let place = builder.get_placeholder();
+                    z.insert(Some(place));place
+                }
+            };
+            // let intype = BaseType(builder.output_type);
+            let mut outertrav = match self.rules.get(&accstate) {None=>{continue;} Some(y)=>y}.clone();
+            outertrav.sort_unstable();outertrav.dedup();
+            for (_,j) in outertrav.iter_mut() {j.reverse()}
+            let mut outertrav = outertrav.into_iter();
+            let (innertoken,intv) = outertrav.next().unwrap();
+            stack.push(ArtificialStack{
+                outercollect:Vec::new(),
+                innercollect:Vec::new(),
+                outertrav,
+                innertoken,
+                innertrav:intv,
+                place,
+                // target: accstate
+                // types: intype
+            });
+            // println!("MEMO: {:?}",memo);
+
+            while stack.len()>0 {
+                let x = stack.last_mut().unwrap();
+                loop {
+                    if let Some(subl) = x.innertrav.pop() {
+                        match memo.get(&subl).copied() {
+                            Some(Some(y))=>{
+                                // println!("using memo element: {:?}",y);
+                                x.innercollect.push(y);
+                                continue;
+                            }
+                            Some(None)=>{x.innercollect.clear();}
+                            None=>{
+                                let mut outertrav = self.rules[&subl].clone();
+                                outertrav.sort_unstable();outertrav.dedup();
+                                for (_,j) in outertrav.iter_mut() {j.reverse()}
+                                let mut outertrav = outertrav.into_iter();
+                                if let Some((innertoken,intv)) = outertrav.next() {
+                                    let place = builder.get_placeholder();
+                                    memo.insert(subl,Some(place));
+                                    x.innertrav.push(subl);
+                                    // println!("pushing: {:?}, placeholder = {:?}",subl,place);
+                                    // let nn = x.types.over(x.innertoken,x.innercollect.len(),builder,ex);
+                                    stack.push(ArtificialStack{
+                                        outercollect:Vec::new(),
+                                        innercollect:Vec::new(),
+                                        outertrav,
+                                        innertoken,
+                                        innertrav:intv,
+                                        // target: subl,
+                                        place,
+                                        // types:nn
+                                    });
+                                    break;
+                                } else {x.innercollect.clear();}
                             }
                         }
-                        None=>{
-                            // builder.deplete_minification_queue();
-                            return rpv.map(|x|(x,self.vm))
-                        }
+                    } else {
+                        let v = take(&mut x.innercollect);
+                        x.outercollect.push((x.innertoken,v));
                     }
-                    break;
+                    if let Some((innertoken,intv))=x.outertrav.next() {
+                        x.innertoken=innertoken;
+                        x.innertrav=intv;
+                    } else {
+                        let ff = stack.pop().unwrap();
+                        let rpv = if ff.outercollect.len()==0 {None} else {Some(builder.insert_into_placeholder(ff.outercollect,ff.place))};
+                        // println!("\n{:?} \n{:?} \n{:?} \n{:?}\n\n",ff.outercollect,rpv,ff.place,stack);
+                        match stack.last() {
+                            Some(x)=>{
+                                if rpv != Some(ff.place) {
+                                    let fl = *x.innertrav.last().unwrap();
+                                    memo.insert(fl,rpv);//harmlessly replace old value
+                                }
+                            }
+                            None=>{
+                                if rpv != Some(ff.place) {
+                                    memo.insert(accstate,rpv);//harmlessly replace old value
+                                }
+                                // builder.deplete_minification_queue();
+                                if let Some(z)=rpv {
+                                    builder.purge(z);
+                                    result.push(z);
+                                }
+                            }
+                        }
+                        break;
+                    }
                 }
             }
-        }
+        } (result,self.vm)
+
+
+        // #[derive(PartialEq,PartialOrd,Eq,Ord,Clone,Hash,Debug)]
+        // enum ConversionOption {
+        //     Positive(Vec<usize>),
+        //     Negative(Vec<usize>),
+        //     Anything
+        // }
+        // use ConversionOption::{*};
+        // fn merge(a:ConversionOption,b:ConversionOption)->ConversionOption {
+        //     match (a,b) {
+        //         (Anything,_)|(_,Anything)=>Anything,
+        //         (Positive(a),Positive(b))=>Positive(dedup_merge(a,b)),
+        //         (Negative(a),Negative(b))=>Negative({
+        //             let j = dedup_intersect(a,b);
+        //             if j.len()==0 {return Anything} else {j}
+        //         }),
+        //         (Positive(a),Negative(b))|(Negative(b),Positive(a))=>Negative({
+        //             let j = dedup_setminus(b,a);
+        //             if j.len()==0 {return Anything} else {j}
+        //         })
+        //     }
+        // }
+        // fn negate(a:ConversionOption)->Option<ConversionOption> {
+        //     match a {
+        //         Positive(a)=>Some(Negative(a)),
+        //         Negative(a)=>Some(Positive(a)),
+        //         Anything=>None
+        //     }
+        // }
+        // fn get_inversion_ledger(builder:&NTFABuilder,ex:&ExpressionBuilder,typeset:&InvType)->Vec<(usize,usize)> {
+        //     let mut oros : Vec<(usize,usize)> = vec![(3,1),(4,1),(7,1),(8,1),(9,3)];
+        //     if typeset.canbe(builder.output_type,ex) {oros.push((10,1));}
+        //     oros.extend(
+        //         (0..ex.get_f_count()).filter_map(|ff|{
+        //             let FunctionEntry {argtypes,restype,..} = &ex.functions[ff];
+        //             if typeset.canbe(*restype,ex) {
+        //                 Some((11+ff,argtypes.len()))
+        //             } else {None}
+        //         })
+        //     );
+        //     if typeset.canbe(builder.input_type,ex) {oros.push((1,0));}
+        //     if typeset.canbe(0,ex) {oros.push((0,0));}
+        //     match &typeset {
+        //         Unknown=>{oros.push((2,2));}
+        //         BaseType(x)=>match &ex.types[*x] {
+        //             PairType(_,_)=>{oros.push((2,2));}
+        //             _=>{}
+        //         }
+        //         FstType(_)=>{oros.push((2,2));}
+        //         SndType(_)=>{oros.push((2,2));}
+        //         _=>{}
+        //     }
+        //     match &typeset {
+        //         SomeLR|Unknown=>{
+        //             oros.push((5,1));
+        //             oros.push((6,1));
+        //         }
+        //         BaseType(x)=>match &ex.types[*x] {
+        //             LRType(_,_)=>{
+        //                 oros.push((5,1));
+        //                 oros.push((6,1));
+        //             }
+        //             _=>{}
+        //         }
+        //         LType(_)=>{oros.push((5,1));}
+        //         RType(_)=>{oros.push((6,1));}
+        //         _=>{}
+        //     }
+        //     oros.sort_unstable();
+        //     oros
+        // }
+        // fn getmergedvl<T:Iterator<Item=usize>>(
+        //     sel:&PartialNTFA,
+        //     builder:&NTFABuilder,
+        //     ex:&ExpressionBuilder,
+        //     ind:T,
+        //     negative:bool,
+        //     typeset:&InvType
+        // )->IntoIter<(usize,Vec<ConversionOption>)> {
+        //     let mut deps:Vec<(usize,Vec<ConversionOption>)> = Vec::new();
+        //     for s in ind {deps.extend(sel.rules.get(&s).into_iter().map(|ii|ii.iter().map(|(f,a)|
+        //         (*f,a.iter().map(|x|if *x==0 {Anything} else {Positive(vec![*x])}).collect())
+        //     )).flatten());}
+        //     deps.sort_unstable();
+        //     deps.dedup();
+        //     // let OLDDEPS = deps.clone();
+        //     let mut a=0;
+        //     while a+1<deps.len() {
+        //         let f = deps[a].0;
+        //         let l = deps[a].1.len();
+        //         let mut b=1;
+        //         while deps[a+b].0==f {
+        //             b+=1;
+        //             if a+b>=deps.len() {break;}
+        //         }
+        //         for x in 0..b-1 {
+        //             let mut y=x+1;
+        //             while y<b {
+        //                 if (0..l).all(|a2|deps[a+x].1[a2]==deps[a+y].1[a2] || deps[a+x].1[a2]==Anything || deps[a+y].1[a2]==Anything) {
+        //                     let depr = take(&mut deps.remove(a+y).1);
+        //                     for (rr,kk) in deps[a+x].1.iter_mut().zip(depr.into_iter()) {
+        //                         if kk==Anything {*rr=Anything;}
+        //                     }
+        //                     b-=1;
+        //                 } else {
+        //                     y+=1;
+        //                 }
+        //             }
+        //         }
+        //         if b != 1 {
+        //             for amt in 0..l {
+        //                 let mut x=0;
+        //                 while x<b {
+        //                     if if let Anything = deps[a+x].1[amt] {
+        //                         let mut ooc = Vec::new();
+        //                         for y in 0..b {
+        //                             if let Positive(k) = &deps[a+y].1[amt] {
+        //                                 if (0..amt).all(|i|deps[a+y].1[i]==deps[a+x].1[i]) {
+        //                                     ooc.push(k[0]);
+        //                                 }
+        //                             }
+        //                         }
+        //                         if ooc.len()>0 {
+        //                             let mut rag = deps[a+x].clone();
+        //                             rag.1[amt]=Negative(ooc.clone());
+        //                             deps[a+x].1[amt]=Positive(ooc);
+        //                             deps.insert(a+x+1,rag);
+        //                             b+=1;false
+        //                         } else {true}
+        //                     } else {true} {
+        //                         let mut y = x+1;
+        //                         while y<b {
+        //                             if (0..l).all(|a2|a2==amt || deps[a+x].1[a2]==deps[a+y].1[a2]) {
+        //                                 let depr = replace(&mut deps.remove(a+y).1[amt],Anything);
+        //                                 deps[a+x].1[amt] = merge(replace(&mut deps[a+x].1[amt],Anything),depr);
+        //                                 b-=1;
+        //                             } else {
+        //                                 y+=1;
+        //                             }
+        //                         }
+        //                         x+=1;
+        //                     }
+        //                 }
+        //             }
+        //         }
+        //         a+=b;
+        //     }
+        //     if negative {
+        //         let mut i=0;
+        //         let mut oros : Vec<(usize,Vec<ConversionOption>)> = Vec::new();
+        //         for (kf,kt) in get_inversion_ledger(builder,ex,typeset) {
+        //             while i<deps.len() && deps[i].0>kf {i+=1}
+        //             if i>=deps.len() {
+        //                 oros.push((kf,(0..kt).map(|_|Anything).collect()));
+        //                 continue;
+        //             }
+        //             if kt==0 {i+=1;continue;}
+        //             let mut j = i+1;
+        //             while j<deps.len() && deps[i].0==deps[j].0 {j+=1;}
+        //             let mut stack = vec![(i,j)];
+        //             'outer: while let Some((i,j))=stack.last().copied() {
+        //                 let amt = stack.len()-1;
+        //                 if amt==deps[i].1.len() {
+        //                     loop {
+        //                         let (i,j) = stack.pop().unwrap();
+        //                         let amt = stack.len()-1;
+        //                         if let Some(z) = deps[i..j].iter().map(|v|v.1[amt].clone()).reduce(merge).and_then(negate) {
+        //                             oros.push((deps[i].0,deps[i].1[..amt].iter().cloned()
+        //                                         .chain(once(z))
+        //                                         .chain((amt+1..deps[i].1.len()).map(|_|Anything)).collect()));
+        //                         }
+        //                         match stack.last_mut() {
+        //                             None=>{break 'outer;}
+        //                             Some((ip,jp))=>{
+        //                                 if *jp==j {continue}
+        //                                 *ip=j;continue 'outer;
+        //                             }
+        //                         }
+        //                     }
+        //                 }
+        //                 let mut k=i+1;
+        //                 while k<j && deps[i].1[amt]==deps[k].1[amt] {k+=1;}
+        //                 stack.push((i,k));
+        //             }
+        //             i=j;
+        //         }
+        //         deps = oros;
+        //     }
+        //     // println!("transform: {:?} => {:?}",OLDDEPS,deps);
+        //     deps.sort_unstable();
+        //     for (_,v) in deps.iter_mut() {
+        //         v.reverse();
+        //     }
+        //     deps.into_iter()
+        // }
+        // if accstates.len()==0 {return None}
+        // struct ArtificialStack {
+        //     outercollect: Vec<(usize,Vec<usize>)>,
+        //     innercollect: Vec<usize>,
+        //     outertrav: IntoIter<(usize,Vec<ConversionOption>)>,
+        //     innertrav: Vec<ConversionOption>,
+        //     innertoken: usize,
+        //     place: usize,
+        //     types: InvType
+        // }
+        // let mut stack:Vec<ArtificialStack> = Vec::new();
+        // let mut memo:HashMap<ConversionOption,Option<usize>> = HashMap::new();
+        // memo.insert(Anything,Some(0));
+
+        // let mut snok = accstates.iter().copied().collect::<Vec<_>>();
+        // snok.sort_unstable();
+
+        // let place = builder.get_placeholder();
+        // memo.insert(Positive(snok.clone()),Some(place));
+        // let intype = BaseType(builder.output_type);
+        // let mut outertrav = getmergedvl(&self,builder,ex,accstates.iter().copied(),false,&intype);
+        // let (innertoken,intv) = outertrav.next().unwrap();
+        // stack.push(ArtificialStack{
+        //     outercollect:Vec::new(),
+        //     innercollect:Vec::new(),
+        //     outertrav,
+        //     innertoken,
+        //     innertrav:intv,
+        //     place,
+        //     types: intype
+        // });
+        // loop {
+        //     let x = stack.last_mut().unwrap();
+        //     loop {
+        //         if let Some(subl) = x.innertrav.pop() {
+        //             match memo.get(&subl).copied() {
+        //                 Some(Some(y))=>{x.innercollect.push(y);continue;}
+        //                 Some(None)=>{x.innercollect.clear();}
+        //                 None=>{
+        //                     let (inn,neg) = match &subl {Anything=>panic!(),Positive(inn)=>(inn,false),Negative(inn)=>(inn,true)};
+        //                     let mut outertrav = getmergedvl(&self,builder,ex,inn.iter().copied(),neg,&x.types);
+        //                     if let Some((innertoken,intv)) = outertrav.next() {
+        //                         let place = builder.get_placeholder();
+        //                         memo.insert(subl.clone(),Some(place));
+        //                         x.innertrav.push(subl);
+        //                         let nn = x.types.over(x.innertoken,x.innercollect.len(),builder,ex);
+        //                         stack.push(ArtificialStack{
+        //                             outercollect:Vec::new(),
+        //                             innercollect:Vec::new(),
+        //                             outertrav,
+        //                             innertoken,
+        //                             innertrav:intv,
+        //                             place,
+        //                             types:nn
+        //                         });
+        //                         break;
+        //                     } else {x.innercollect.clear();}
+        //                 }
+        //             }
+        //         } else {
+        //             let v = take(&mut x.innercollect);
+        //             x.outercollect.push((x.innertoken,v));
+        //         }
+        //         if let Some((innertoken,intv))=x.outertrav.next() {
+        //             x.innertoken=innertoken;
+        //             x.innertrav=intv;
+        //         } else {
+        //             let ff = stack.pop().unwrap();
+        //             let rpv = if ff.outercollect.len()==0 {None} else {Some(builder.insert_into_placeholder(ff.outercollect,ff.place))};
+        //             match stack.last() {
+        //                 Some(x)=>{
+        //                     if rpv != Some(ff.place) {
+        //                         let fl = x.innertrav.last().unwrap();
+        //                         memo.insert(fl.clone(),rpv);//harmlessly replace old value
+        //                     }
+        //                 }
+        //                 None=>{
+        //                     // builder.deplete_minification_queue();
+        //                     return rpv.map(|x|(x,self.vm))
+        //                 }
+        //             }
+        //             break;
+        //         }
+        //     }
+        // }
     }
 }
 

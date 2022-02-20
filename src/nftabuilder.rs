@@ -3,6 +3,7 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::collections::BinaryHeap;
+use std::cell::RefCell;
 use std::rc::Rc;
 use std::collections::hash_map::Entry::*;
 use crate::ntfa::{*};
@@ -65,7 +66,9 @@ pub struct ExpressionBuilder {
     pub types:Vec<ProcType>,
     pub falseval:Option<usize>,
     pub trueval:Option<usize>,
-    
+
+    temporary_recursive_memo:Option<(Rc<RefCell<HashMap<usize,usize>>>,Rc<Dsl>)>,
+
     pub debug_type_names:HashMap<usize,String>,
     pub debug_constr_names:HashMap<usize,Constname>,//type,value
 }
@@ -90,6 +93,8 @@ impl ExpressionBuilder {
             types:vec![UnitType],
             falseval:None,
             trueval:None,
+
+            temporary_recursive_memo:None,
 
             debug_type_names:HashMap::new(),
             debug_constr_names:HashMap::new()
@@ -126,8 +131,6 @@ impl ExpressionBuilder {
             }
         }
     }
-
-    
     pub fn get_required_function_args(&self,f:usize) -> Option<usize> {self.functions.get(f).map(|FunctionEntry{argtypes:a,..}|a.len())}
     pub fn exec_function(&mut self,f:usize,args:Vec<usize>) -> usize {
         let nargs = args.into_boxed_slice();
@@ -140,6 +143,22 @@ impl ExpressionBuilder {
                 }
             }
         }
+    }
+    pub fn exec_interior_recursive_function(&mut self,arg:usize) -> usize {
+        if let Some(z) = self.temporary_recursive_memo.as_ref().unwrap().0.borrow_mut().get(&arg) {
+            return *z;
+        }
+        let trsh = self.temporary_recursive_memo.as_ref().unwrap().1.clone();
+        match self.substitute(&trsh,0,0,Rc::new(vec![(vec![BaseValue(arg)],0)])) {
+            BaseValue(y)=>{
+                self.temporary_recursive_memo.as_ref().unwrap().0.borrow_mut().insert(arg,y);y
+            } _=>panic!()
+        }
+    }
+    pub fn eval_recursive_function(&mut self,func:Rc<Dsl>,temp:Rc<RefCell<HashMap<usize,usize>>>,arg:usize) -> usize {
+        self.temporary_recursive_memo = Some((temp,func.clone()));
+        let res = self.exec_interior_recursive_function(arg);
+        self.temporary_recursive_memo = None; res
     }
 
     pub fn get_placeholder_type(&mut self) -> usize {self.types.push(Placeholder);self.types.len()-1}
@@ -308,9 +327,10 @@ impl NTFABuilder {
             ],//inner vec must be sorted
             revhash:HashMap::new(),
             intersect_memo:HashMap::new(),
-            rename_memo:HashMap::new(),
-            subset_memo:HashMap::new(),
+            // rename_memo:HashMap::new(),
+            // subset_memo:HashMap::new(),
             // minification_queue:Vec::new(),
+            purgeset:HashSet::new()
         }
     }
     pub fn build_ntfa(
@@ -320,10 +340,10 @@ impl NTFABuilder {
         outputs:&HashMap<usize,BaseLiteral>,
         confirmer:&Confirmer,
         previous_accepting_states:&mut HashMap<usize,HashSet<usize>>,
-        graph_buffer : &mut HashMap<usize,Option<(usize,ValueMapper)>>,
+        graph_buffer : &mut HashMap<usize,PartialNTFA>,
         subexpressions : &mut HashMap<usize,HashSet<usize>>,
         k:usize
-    )->Option<(usize,ValueMapper)> {
+    )->(Option<usize>,ValueMapper) {
     //     println!("-=-=-=-=-=-=-=-=-=- BEGINNING BUILD PHASE: {:?}",DebugTypedValue{val:input,ty:input_type,expr:builder});
         #[derive(Default)]
         struct StackElem {
@@ -565,7 +585,7 @@ impl NTFABuilder {
             }
             let StackElem{
                 input,
-                mut res,
+                res,
                 accepting_states,
                 ..
             } = stack.pop().unwrap();
@@ -573,12 +593,20 @@ impl NTFABuilder {
             // println!("constructed one.");
             // println!("determinizing...");
             // res.determinize();
-            println!("converting...");
-            graph_buffer.insert(input,res.convert(self,builder,&accepting_states));
-            println!("converted!");
+            // println!("converting...");
+            // if accepting_states.len()==0 {return None}
+            // if accepting_states.len()>1 {
+            //     panic!("needs some more development...")
+            // }
+            graph_buffer.insert(input,res);
+            // println!("converted!");
+            
             previous_accepting_states.insert(input,accepting_states);
         }
-        graph_buffer.remove(&input).unwrap()
+        // println!("converting...");
+        let accepting_states : Vec<_> = previous_accepting_states[&input].iter().copied().collect();
+        let (states,vm) = graph_buffer.remove(&input).unwrap().convert(self,&accepting_states);
+        (self.simplify(states),vm)
     }
 }
 

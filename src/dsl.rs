@@ -37,8 +37,10 @@ pub enum ProcPattern {
 }
 use ProcPattern::{*};
 
-#[derive(Clone)]
+#[derive(Clone,PartialEq,Eq)]
 pub enum Dsl {
+    RecursivePlaceholder,
+
     TransferStack(Box<Dsl>,usize),
     AccessStack(usize),
     ApplyStack(Box<Dsl>,Vec<Dsl>),
@@ -104,8 +106,7 @@ impl ExpressionBuilder {
             BaseValue(f)=> match &self.values[f].0 {
                 FuncAsValue(f) => {
                     let f=*f;
-                    let aa = self.get_required_function_args(f);
-                    if let Some(aa) = aa {
+                    if let Some(aa) = self.get_required_function_args(f) {
                         if b.len()>=aa {
                             let mut okay = true;
                             let args = b.iter().take(aa).map(|x|if let BaseValue(y)=x {*y} else {okay=false;0}).collect();
@@ -121,6 +122,13 @@ impl ExpressionBuilder {
                 }
                 _=>panic!()
             },
+            RecursivePlaceholder=>{
+                if b.len()!=1 {panic!("this can be supported but isn't right now");}
+                if let BaseValue(v) = &b[0] {
+                    return BaseValue(self.exec_interior_recursive_function(*v));
+                }
+                ApplyStack(Box::new(RecursivePlaceholder),b)
+            }
             f => ApplyStack(Box::new(f),b)
         }
     }
@@ -242,6 +250,7 @@ impl ExpressionBuilder {
     }
     pub fn substitute(&mut self,a:&Dsl,amt:usize,lim:usize,mut sub:Rc<Vec<(Vec<Dsl>,usize)>>) -> Dsl {
         match a {
+            RecursivePlaceholder=>RecursivePlaceholder,
             AccessStack(mut i)=>{
                 if i>=lim {i+=amt}
                 for (ind,(l,a)) in sub.iter().enumerate() {
@@ -340,6 +349,7 @@ impl ExpressionBuilder {
     pub fn bbump(a:&Box<Dsl>,amt:usize,lim:usize) -> Box<Dsl> {Box::new(Self::bump(&(*a),amt,lim))}
     pub fn bump(a:&Dsl,amt:usize,lim:usize) -> Dsl {
         match a {
+            RecursivePlaceholder=>RecursivePlaceholder,
             AccessStack(i)=>AccessStack(if *i>=lim {i+amt} else {*i}),
             TransferStack(a,b)=>TransferStack(Self::bbump(a,amt,lim+b),*b),
             ApplyStack(a,b)=>ApplyStack(Self::bbump(a,amt,lim),b.into_iter().map(|x|Self::bump(x,amt,lim)).collect()),

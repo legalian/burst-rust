@@ -5,7 +5,8 @@ use crate::queue::{*};
 use std::collections::BinaryHeap;
 use std::collections::HashMap;
 use std::collections::HashSet;
-// use std::rc::Rc;
+use std::cell::RefCell;
+use std::rc::Rc;
 use ProcValue::{*};
 // use ProcType::{*};
 // use RefineLiteral::{*};
@@ -62,12 +63,10 @@ pub fn synthesize(
     let confirmer = spec.getconfirmer();
     let mut heap = BinaryHeap::new();
     heap.push(QueueElem{ item:spec, priority:0 });
-    println!("pre-pop!");
     while let Some(QueueElem{ item:mut spec, .. }) = heap.pop() {
-        println!("post-pop!");
         'specloop: while let Some(states) = spec.get_next() {
             // println!("Found one option");
-            let mut graph_buffer : HashMap<usize,Option<(usize,ValueMapper)>> = HashMap::new();
+            let mut graph_buffer : HashMap<usize,PartialNTFA> = HashMap::new();
             let mut accepting_states : HashMap<usize,HashSet<usize>> = HashMap::new();
             let mut opntfa : Option<usize> = None;
             let mut tables : Vec<ValueMapper> = Vec::new();
@@ -77,7 +76,7 @@ pub fn synthesize(
             let mut debug_converted = Vec::new();
             let mut debug_intersected = Vec::new();
             for a in order {
-                println!("building...");
+                // println!("building...");
                 let (newntfa,newmapping) = match ntfabuilder.build_ntfa(
                     &mut exprbuilder,
                     a,
@@ -88,8 +87,8 @@ pub fn synthesize(
                     &mut subexpressions,
                     12
                 ) {
-                    Some(z)=>z,
-                    None=>{
+                    (Some(z),w)=>(z,w),
+                    _=>{
                         //mark into omega
                         println!("No accepting states after ntfa built");
                         if !spec.increment() {break 'specloop}
@@ -129,11 +128,14 @@ pub fn synthesize(
                     None=>Some(newntfa),
                     Some(oldstate)=>{
                         println!("intersecting...");
-                        if let Some(intstate) = ntfabuilder.intersect(newntfa,oldstate) {
-                            ntfabuilder.simplify(vec![intstate]);
+                        if let Some(intstate) = ntfabuilder.intersect(newntfa,oldstate).and_then(|u|{
+
+                            // ntfabuilder.output_tree(u);
+
+                            ntfabuilder.simplify(vec![u])
+                        }) {
                             debug_intersected.push(intstate);
                             println!(" ------- outputting!");
-                            // ntfabuilder.output_tree(intstate);
                             // ntfabuilder.deplete_minification_queue();
                             // ntfabuilder.forget_minification_queue();
                             Some(intstate)
@@ -148,15 +150,33 @@ pub fn synthesize(
             }
             let ntfa = opntfa.unwrap();
             let solution_list = ntfabuilder.get_accepting_run(ntfa,&mut exprbuilder,&tables);
+            
             if solution_list.len()>0 {
                 for (solution,solsize,witness) in solution_list {
                     println!("PARTIAL SOLUTION FOUND: {:#?}  {:?} {:?}",EnhancedPrintDsl{dsl:&solution,expr:&exprbuilder},witness,solsize);
-                    // for j in debug_converted.iter().copied() {
-                    //     println!("converted graph accepts? {:?}",ntfabuilder.debug_is_accepting_run(j,&solution,&exprbuilder));
-                    // }
-                    // for j in debug_intersected.iter().copied() {
-                    //     println!("intersected graph accepts? {:?}",ntfabuilder.debug_is_accepting_run(j,&solution,&exprbuilder));
-                    // }
+                    let dslsol = Rc::new(solution.clone());
+                    let tmemo = Rc::new(RefCell::new(HashMap::new()));
+                    for (key,val) in states.iter() {
+                        let relval = exprbuilder.eval_recursive_function(dslsol.clone(),tmemo.clone(),*key);
+                        println!("f({:?}) = {:?}",DebugTypedValue {
+                            val:*key,
+                            ty:input_type,
+                            expr:&exprbuilder
+                        },DebugTypedValue {
+                            val:relval,
+                            ty:output_type,
+                            expr:&exprbuilder
+                        });
+                    }
+                    // let solution = dslsol
+
+
+                    for j in debug_converted.iter().copied() {
+                        println!("converted graph accepts? {:?}",ntfabuilder.debug_is_accepting_run(j,&solution,&exprbuilder));
+                    }
+                    for j in debug_intersected.iter().copied() {
+                        println!("intersected graph accepts? {:?}",ntfabuilder.debug_is_accepting_run(j,&solution,&exprbuilder));
+                    }
                 }
                 return;
                 // let mut yes_side = spec.clone();

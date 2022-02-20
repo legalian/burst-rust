@@ -17,6 +17,7 @@ use std::fs::read_dir;
 use dsl::interpret_file;
 use synthesis::synthesize;
 use std::path::PathBuf;
+use std::time::{Instant};
 
 
 fn main() {
@@ -35,6 +36,13 @@ fn main() {
     println!("simplify singular alim, blim");
     println!("");
     println!("issue: replace hashset with BTreeSet anytime you need iteration; hashset is terrible at it.");
+    println!("");
+    println!("");
+    println!("");
+    println!("you need accessibility cleaning and ");
+    println!("");
+    println!("");
+    println!("");
 
 
 
@@ -47,9 +55,12 @@ fn main() {
                 else {Some(p)}
             }).collect();
     paths.sort();
-    for fullpath in paths.into_iter().skip(7).take(7) {
+    for fullpath in paths.into_iter().skip(7).take(1) {
+        println!("");
         let (builder,spec,(input_type,output_type)) = interpret_file(fullpath);
+        let now = Instant::now();
         synthesize(builder,spec,input_type,output_type);
+        println!("time taken: {}/1000 seconds", now.elapsed().as_millis());
     }
     // for fullpath in paths.into_iter().skip(7).take(1) {
     //     let (builder,spec,(input_type,output_type)) = interpret_file(fullpath);
