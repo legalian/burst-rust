@@ -12,7 +12,7 @@ use std::iter::{*};
 
 use crate::dsl::{*};
 use crate::nftabuilder::{*};
-use crate::debug::{*};
+// use crate::debug::{*};
 // use crate::queue::{*};
 use std::cmp::{min,max};
 use std::vec::IntoIter;
@@ -99,6 +99,91 @@ pub struct NTFABuilder {
 }
 
 
+struct OccuranceTracker {
+    unconfirmed:HashSet<usize>,
+    occurances:HashMap<usize,HashSet<usize>>,
+}
+impl OccuranceTracker {
+    fn new() -> Self { 
+        OccuranceTracker{
+            unconfirmed:HashSet::new(),
+            occurances:HashMap::new()
+        }
+    }
+    fn add_unconfirmed(&mut self,a:usize) {
+        self.unconfirmed.insert(a);
+        self.occurances.insert(a,HashSet::new());
+    }
+    fn forget(&mut self,a:usize) {
+        self.unconfirmed.remove(&a);
+        self.occurances.remove(&a);
+    }
+    fn depends_on(&mut self,a:usize,v:&Vec<(usize,Vec<usize>)>){
+        for (_,w) in v {
+            for u in w {
+                if let Some(k) = self.occurances.get_mut(u) {
+                    k.insert(a);
+                }
+            }
+        }
+    }
+    fn kill_unused_and_report(mut self,mut rtrack:Option<usize>,builder:&mut NTFABuilder)->Option<usize> {
+        println!("killing unused...");
+        let mut stack : Vec<usize> = self.unconfirmed.iter().copied().collect();
+        while let Some(a) = stack.pop() {
+            if !self.unconfirmed.contains(&a) {continue;}
+            if builder.paths[a].iter().any(|(_,y)|y.iter().all(|x|!self.unconfirmed.contains(x))) {
+                self.unconfirmed.remove(&a);
+                for j in self.occurances[&a].iter() {
+                    if self.unconfirmed.contains(j) {
+                        // println!("adding to stack: {:?}",*j);
+                        stack.push(*j)
+                    }
+                }
+            }
+        }
+        println!("checkpoint killing unused...");
+        let mut rstack : Vec<usize> = self.unconfirmed.into_iter().collect();
+        let mut visited = HashSet::new();
+        while let Some(a) = rstack.pop() {
+            if !visited.insert(a) {continue;}
+            println!("killing: {}",a);
+            // if b.is_none() {println!("killing: {}",a)}
+            if rtrack==Some(a) {rtrack=None;}
+            for occurance in self.occurances[&a].iter().copied() {
+                let v = &mut builder.paths[occurance];
+                // builder.revhash.remove(v);
+                // match b {
+                //     Some(b) => {
+                //         for (_,w) in v.iter_mut() {
+                //             for u in w.iter_mut() {
+                //                 if *u==a {*u=b;}
+                //             }
+                //         }
+                //     }
+                    // None => {
+                for i in (0..v.len()).rev() {
+                    if v[i].1.iter().any(|u|*u==a) {v.remove(i);}
+                }
+                    // }
+                // }
+                if v.len()==0 {
+                    rstack.push(occurance);
+                }
+                // else {
+                //     match builder.revhash.entry(v.clone()) {
+                //         Vacant(x)=>{x.insert(occurance);}
+                //         Occupied(x)=>{rstack.push((occurance,Some(*x.get())));}
+                //     }
+                // }
+            }
+        }
+        println!("finished killing unused...");
+        rtrack
+    }
+}
+
+
 
 
 impl NTFABuilder {
@@ -174,6 +259,7 @@ impl NTFABuilder {
         let (innertoken,intv) = match outertrav.next() {
             Some(x)=>x,None=>{return None;}
         };
+        // let mut tracker = OccuranceTracker::new();
         // tracker.add_unconfirmed(place);
         stack.push(ArtificialStack{
             outercollect:Vec::new(),
@@ -224,6 +310,7 @@ impl NTFABuilder {
                     match stack.last() {
                         Some(x)=>{
                             if rpv != Some(ff.place) {
+                                panic!("forgetting! returning none!");
                                 // tracker.forget(ff.place);
                                 let fl = *x.innertrav.last().unwrap();
                                 self.intersect_memo.insert(fl,rpv);//harmlessly replace old value
@@ -364,16 +451,14 @@ impl NTFABuilder {
         while let Some(z) = stack.pop() {
             for (f,a) in self.paths[z].iter() {
                 for (i,c) in a.iter().copied().enumerate() {
-                    if match ownership.entry(c) {
-                        Occupied(v)=>0==*v.get(),
+                    invocc.entry(c).or_default().push(((*f,&a[..i],&a[i+1..]),z));
+                    match ownership.entry(c) {
+                        Occupied(_)=>{},
                         Vacant(v)=>{
                             v.insert(1);
                             stack.push(c);
                             nonaccstates.push(c);
-                            true
                         }
-                    } {
-                        invocc.entry(c).or_default().push(((*f,&a[..i],&a[i+1..]),z));
                     }
                 }
             }
@@ -386,10 +471,17 @@ impl NTFABuilder {
             hotpools.insert(1);
             vec![(accstates.clone(),Vec::new()),(nonaccstates,accstates.clone())]
         };
+
+
+
         let mut eyes : HashMap<usize,HashSet<usize>> = HashMap::new();
         let mut hotmemo : HashMap<usize,Vec<(&(usize,&[usize],&[usize]),usize)>> = HashMap::new();
         while hotpools.len()>0 {
             let i = *hotpools.iter().next().unwrap();
+            if pools[i].0.len()==1 && pools[i].1.len()==0 {
+                hotpools.remove(&i);
+                continue;
+            }
             fn getblh<'a,'b>(
                 invocc:&'a HashMap<usize,Vec<((usize,&'a [usize],&'a [usize]),usize)>>,
                 ownership:&'b HashMap<usize,usize>,
@@ -427,6 +519,7 @@ impl NTFABuilder {
             for ow in pools[i].0.iter() {
                 differentiator.entry(&hotmemo[ow]).or_default().push(*ow);
             }
+
             let mut result : Vec<_> = differentiator.into_iter().map(|(a,b)|(a,b,Vec::new())).collect();
             for x in 0..result.len()-1 {
                 for y in x+1..result.len() {
@@ -445,8 +538,10 @@ impl NTFABuilder {
                     if is_superset(ghl,t) {r.push(*sub);}
                 }
             }
+            
             if result.len()>1 {
-                let ff = result.pop().unwrap();
+                let mut result = result.into_iter();
+                let ff = result.next().unwrap();
                 pools[i].0 = ff.1;
                 pools[i].1 = ff.2;
                 for (_,v,w) in result {
@@ -463,28 +558,32 @@ impl NTFABuilder {
                 }
                 hotmemo.retain(|_,v|!v.iter().any(|(_,y)|*y==i));
             } else {
-                for w in result[0].0 {
+                let wk = result.remove(0);
+                for w in wk.0 {
                     eyes.entry(w.1).or_default().insert(i);
                 }
-                pools[i].1 = result.remove(0).2;
+                pools[i].1 = wk.2;
                 hotpools.remove(&i);
             }
         }
 
-        // println!("\n\n{:?}\n{:?}\n\n",pools,ownership);
-
-        // let mut stack : Vec<usize> = accstates.clone();
-        // let mut dedup : HashSet<usize> = HashSet::new();
-        // while let Some(z) = stack.pop() {
-        //     println!("{:?} := {:?}",z,self.paths[z]);
-        //     for (_,a) in self.paths[z].iter() {
-        //         for c in a.iter().copied() {
-        //             if dedup.insert(c) {
-        //                 stack.push(c);
+        println!("\n\n{:?}\n{:?}\n\n",pools,ownership);
+        // 'stupid: loop{{{
+        //         let mut stack : Vec<usize> = accstates.clone();
+        //         let mut dedup : HashSet<usize> = HashSet::new();
+        //         while let Some(z) = stack.pop() {
+        //             println!("{:?} := {:?}",z,self.paths[z]);
+        //             for (_,a) in self.paths[z].iter() {
+        //                 for c in a.iter().copied() {
+        //                     if dedup.insert(c) {
+        //                         stack.push(c);
+        //                     }
+        //                 }
         //             }
         //         }
-        //     }
-        // }
+        //         break
+        // }}}
+
         let mut hs = HashSet::new();
         let mut oup = Vec::new();
         for b in accstates {
@@ -531,12 +630,20 @@ impl NTFABuilder {
                         let mut y = x;
                         let mut collect:Vec<usize> = Vec::new();
                         let mut hs = HashSet::new();
+                        // let mut DEBUG_HS2 = HashSet::new();
                         while y<partition {
                             if (0..l).all(|a2|a2==amt || deps[a+x].1[a2]==deps[a+y].1[a2]) {
-                                if hs.insert(b) {
-                                    let own = ownership[&deps[a+y].1[amt]];
+                                let ncent = deps[a+y].1[amt];
+                                // println!("{:?} (owner:{:?})",ncent,ownership[&ncent]);
+                                // DEBUG_HS2.insert(ncent);
+                                if hs.insert(ncent) {
+                                    let own = ownership[&ncent];
                                     collect.push(own);
+                                    // println!("extending {:?} {:?}",own,pools[own]);
                                     hs.extend(pools[own].0.iter().copied());
+                                    if pools[own].1.len()>0 {
+                                        collect.retain(|x|!pools[own].1.contains(x));
+                                    }
                                     hs.extend(pools[own].1.iter().copied());
                                 }
                                 if y!=x {
@@ -547,6 +654,12 @@ impl NTFABuilder {
                                 } else {y+=1}
                             } else {y+=1;}
                         }
+                        // for HHH in hs.iter() {
+                        //     if !DEBUG_HS2.contains(&HHH) {
+                        //         panic!("OH NO {:?} {:?}",HHH,DEBUG_HS2);
+                        //     }
+                        // }
+                        // println!("=>{:?} {:?}",hs,collect);
                         deps[a+x].1[amt]=collect.pop().unwrap();
                         for col in collect {
                             let mut cr = deps[a+x].clone();

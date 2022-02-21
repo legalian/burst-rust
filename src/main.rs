@@ -20,6 +20,7 @@ use std::path::PathBuf;
 use std::time::{Instant};
 
 
+
 fn main() {
     println!("just because you found a solution doesn't mean that it's the smallest solution of that branch.");
     println!("you'll need to further refine your answer before you output it.");
@@ -39,13 +40,16 @@ fn main() {
     println!("");
     println!("");
     println!("");
-    println!("you need accessibility cleaning and ");
     println!("");
     println!("");
+    println!("so maybe the reason it's going wrong is that (&[],&[]) doesn't work because there are weird duplicate interactions.");
+
     println!("");
-
-
-
+    println!("");
+    println!("constants may be important");
+    println!("simplifying inplace to skip work on singular pools may be important");
+    println!("");
+    println!("");
 
     let mut paths : Vec<PathBuf> = read_dir("evaluation/benchmarks/io").unwrap().into_iter().chain(
         read_dir("evaluation/benchmarks/logical").unwrap().into_iter()).chain(

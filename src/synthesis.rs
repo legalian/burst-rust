@@ -74,6 +74,7 @@ pub fn synthesize(
             let mut order = states.keys().copied().collect::<Vec<_>>();
             order.sort_unstable_by_key(|x|exprbuilder.values[*x].1);
             let mut debug_converted = Vec::new();
+            let mut debug_unsimplified_intersected = Vec::new();
             let mut debug_intersected = Vec::new();
             for a in order {
                 // println!("building...");
@@ -96,26 +97,6 @@ pub fn synthesize(
                     }
                 };
                 debug_converted.push(newntfa);
-            // for (newntfa,newmapping) in vec![{
-            //     let mut res = PartialNTFA::new();
-            //     res.add_rule(0,vec![],1);
-            //     res.add_rule(1,vec![],1);
-
-            //     res.add_rule(9,vec![1,0,1],3);
-            //     println!("builing! {:?}",res);
-            //     // res.add_rule(9,vec![2,2,0],3);
-            //     res
-            // }.convert(&mut ntfabuilder,&{let mut h = HashSet::new();h.insert(3);h}).unwrap(),{
-            //     let mut res = PartialNTFA::new();
-            //     res.add_rule(0,vec![],1);
-            //     res.add_rule(1,vec![],2);
-
-            //     // res.add_rule(9,vec![1,0,1],3);
-            //     res.add_rule(9,vec![2,2,0],3);
-            //     println!("builing! {:?}",res);
-            //     res
-            // }.convert(&mut ntfabuilder,&{let mut h = HashSet::new();h.insert(3);h}).unwrap(),] {
-
 
                 println!("built ntfa for: {:?}",DebugTypedValue {
                     val:a,
@@ -128,14 +109,16 @@ pub fn synthesize(
                     None=>Some(newntfa),
                     Some(oldstate)=>{
                         println!("intersecting...");
-                        if let Some(intstate) = ntfabuilder.intersect(newntfa,oldstate).and_then(|u|{
-
+                        if let Some(intstate) = ntfabuilder.intersect(newntfa,oldstate)
+                        .and_then(|u|{
                             // ntfabuilder.output_tree(u);
-
+                            debug_unsimplified_intersected.push(u);
                             ntfabuilder.simplify(vec![u])
-                        }) {
+                        }) 
+                        {
                             debug_intersected.push(intstate);
                             println!(" ------- outputting!");
+                            ntfabuilder.output_tree(intstate);
                             // ntfabuilder.deplete_minification_queue();
                             // ntfabuilder.forget_minification_queue();
                             Some(intstate)
@@ -156,7 +139,7 @@ pub fn synthesize(
                     println!("PARTIAL SOLUTION FOUND: {:#?}  {:?} {:?}",EnhancedPrintDsl{dsl:&solution,expr:&exprbuilder},witness,solsize);
                     let dslsol = Rc::new(solution.clone());
                     let tmemo = Rc::new(RefCell::new(HashMap::new()));
-                    for (key,val) in states.iter() {
+                    for (key,_val) in states.iter() {
                         let relval = exprbuilder.eval_recursive_function(dslsol.clone(),tmemo.clone(),*key);
                         println!("f({:?}) = {:?}",DebugTypedValue {
                             val:*key,
@@ -173,6 +156,9 @@ pub fn synthesize(
 
                     for j in debug_converted.iter().copied() {
                         println!("converted graph accepts? {:?}",ntfabuilder.debug_is_accepting_run(j,&solution,&exprbuilder));
+                    }
+                    for j in debug_unsimplified_intersected.iter().copied() {
+                        println!("intersected graph (unsimplified) accepts? {:?}",ntfabuilder.debug_is_accepting_run(j,&solution,&exprbuilder));
                     }
                     for j in debug_intersected.iter().copied() {
                         println!("intersected graph accepts? {:?}",ntfabuilder.debug_is_accepting_run(j,&solution,&exprbuilder));

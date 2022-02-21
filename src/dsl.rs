@@ -104,23 +104,23 @@ impl ExpressionBuilder {
                 else {we}
             },
             BaseValue(f)=> match &self.values[f].0 {
-                FuncAsValue(f) => {
-                    let f=*f;
-                    if let Some(aa) = self.get_required_function_args(f) {
+                FuncAsValue(fo) => {
+                    let fo=*fo;
+                    if let Some(aa) = self.get_required_function_args(fo) {
                         if b.len()>=aa {
                             let mut okay = true;
                             let args = b.iter().take(aa).map(|x|if let BaseValue(y)=x {*y} else {okay=false;0}).collect();
                             if okay {
                                 if b.len()==aa {
-                                    return BaseValue(self.exec_function(f,args))
+                                    return BaseValue(self.exec_function(fo,args))
                                 }
-                                return ApplyStack(Box::new(BaseValue(self.exec_function(f,args))),b.into_iter().skip(aa).collect())
+                                return ApplyStack(Box::new(BaseValue(self.exec_function(fo,args))),b.into_iter().skip(aa).collect())
                             } 
                         }
                     }
                     ApplyStack(Box::new(BaseValue(f)),b)
                 }
-                _=>panic!()
+                _=>panic!("tried to apply arguments to a basevalue : {:?} {:?} {:?}",f,DebugValue{t:f,expr:self},b)
             },
             RecursivePlaceholder=>{
                 if b.len()!=1 {panic!("this can be supported but isn't right now");}

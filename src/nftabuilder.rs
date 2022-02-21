@@ -32,7 +32,7 @@ pub enum ProcValue {
 }
 use ProcValue::{*};
 
-
+#[derive(Debug)]
 pub struct FunctionEntry {
     dsl:Rc<Dsl>,
     concval:usize,
@@ -119,7 +119,7 @@ impl ExpressionBuilder {
         for (i,arg) in tys.iter().enumerate() {
             self.stupid_typemap.entry(*arg).or_default().push((self.functions.len(),i));
         }
-        match self.placeholderfunc {
+        let result = match self.placeholderfunc {
             Some(x)=>{
                 self.placeholderfunc=None;
                 self.functions.push(FunctionEntry{dsl:Rc::new(f),concval:x,argtypes:tys,restype:resultant});x
@@ -129,17 +129,20 @@ impl ExpressionBuilder {
                 self.values.push((FuncAsValue(self.functions.len()),1));
                 self.functions.push(FunctionEntry{dsl:Rc::new(f),concval:nval,argtypes:tys,restype:resultant});nval
             }
-        }
+        };
+        return result
     }
     pub fn get_required_function_args(&self,f:usize) -> Option<usize> {self.functions.get(f).map(|FunctionEntry{argtypes:a,..}|a.len())}
     pub fn exec_function(&mut self,f:usize,args:Vec<usize>) -> usize {
+        // if self.functions[f].argtypes.len()>args.len() {panic!("not enough arguments!")}
         let nargs = args.into_boxed_slice();
         match self.functionmemo.entry((f,nargs.clone())) {
             Occupied(x) => *x.get(),
             Vacant(_) => {
                 let trsh = self.functions[f].dsl.clone();
                 match self.substitute(&trsh,0,0,Rc::new(vec![(nargs.into_iter().rev().map(|x|BaseValue(*x)).collect(),0)])) {
-                    BaseValue(y)=>{self.functionmemo.insert((f,nargs),y);y},_=>panic!()
+                    BaseValue(y)=>{self.functionmemo.insert((f,nargs),y);y}
+                    k=>panic!("failed to resolve to concrete value! \nfunction: {:#?}\n{:?}\n{:?}\n",self.functions[f].dsl,nargs,k)
                 }
             }
         }
@@ -505,6 +508,7 @@ impl NTFABuilder {
                             for (i,argtype) in argtypes.into_iter().enumerate() {
                                 if i==*s_ind {
                                     for (c,ss) in cartesian.iter_mut() {c.push(x);*ss+=size}
+                                    // println!("operated on cartesian {:?}",cartesian);
                                     continue;
                                 }
                                 let mut swap_buf = Vec::new();
@@ -515,11 +519,13 @@ impl NTFABuilder {
                                         }
                                     }
                                 }
-                                if swap_buf.len()==0 {break;}
                                 cartesian=swap_buf;
+                                if cartesian.len()==0 {break;}
+                                // println!("increasing {:?} to {:?}",cartesian,swap_buf);
                             }
+                            // println!("calling function: {:?} {:?}",argtypes,cartesian);
                             for (cart,csize) in cartesian.into_iter() {
-                                if csize>=k {continue;}
+                                // if csize>=k {continue;}
                                 let exec = builder.exec_function(*f_ind,cart.clone());
                                 res.add_rule(11+*f_ind,cart,exec);
                                 queue.push(QueueElem{item:(exec,vec![restype],true),priority:csize+1});
@@ -540,7 +546,7 @@ impl NTFABuilder {
                             let r = match &builder.types[*w] {PairType(_,r)=>r,_=>panic!()};
                             if let Some(v) = processed_rel.get(&r) {
                                 for (u,usi) in v.iter() {
-                                    if *usi+size>=k {continue;}
+                                    // if *usi+size>=k {continue;}
                                     let merged = builder.get_pair(x,*u);
                                     res.add_rule(2,vec![x,*u],merged);
                                     queue.push(QueueElem{item:(merged,vec![*w],false),priority:*usi+size+1});
@@ -554,7 +560,7 @@ impl NTFABuilder {
                             let l = match &builder.types[*w] {PairType(l,_)=>l,_=>panic!()};
                             if let Some(v) = processed_rel.get(&l) {
                                 for (u,usi) in v.iter() {
-                                    if *usi+size>=k {continue;}
+                                    // if *usi+size>=k {continue;}
                                     let merged = builder.get_pair(*u,x);
                                     res.add_rule(2,vec![*u,x],merged);
                                     queue.push(QueueElem{item:(merged,vec![*w],false),priority:*usi+size+1});
@@ -566,7 +572,7 @@ impl NTFABuilder {
                 if x!=1 && !processed.contains_key(&x) {
                     processed.insert(x,size);
                     for (y,ysize) in processed.iter() {
-                        if *ysize+size>=k {continue;}
+                        // if *ysize+size>=k {continue;}
                         match &builder.values[*y].0 {
                             LValue(_)=>{res.add_rule(9,vec![*y,x,0],x);}
                             RValue(_)=>{res.add_rule(9,vec![*y,0,x],x);}
