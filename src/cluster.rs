@@ -4,7 +4,7 @@ use std::mem::replace;
 
 #[derive(Clone)]
 pub struct Cluster<T> {
-    cluster:Vec<(Option<T>,Option<usize>,Option<usize>)>,
+    pub cluster:Vec<(Option<T>,Option<usize>,Option<usize>)>,
     first:Option<usize>,
     last:Option<usize>,
     freefirst:Option<usize>,

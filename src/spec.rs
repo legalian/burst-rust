@@ -24,13 +24,14 @@ impl Confirmer {
     pub fn accepts(&self,ex:&mut ExpressionBuilder,input:usize,output:usize) -> bool {
         match self {
             Nothing => true,
-            CheckPred(f) => {
-                let tv = ex.trueval.unwrap();
-                let fv = ex.falseval.unwrap();
-                let res = ex.exec_function(*f,vec![input,output]);
-                if res==tv {true}
-                else if res==fv {false}
-                else {panic!()}
+            CheckPred(_) => {
+                panic!();
+                // let tv = ex.trueval.unwrap();
+                // let fv = ex.falseval.unwrap();
+                // let res = ex.exec_function(*f,vec![input,output]);
+                // if res==tv {true}
+                // else if res==fv {false}
+                // else {panic!()}
             }
             CheckFunc(f) => output == ex.exec_function(*f,vec![input])
         }
@@ -80,7 +81,7 @@ impl SpecVariant {
 
 
 
-#[derive(Clone)]
+#[derive(Clone,Debug)]
 pub enum RefineLiteral {
     EqLit(usize),
     NeqLit(usize)
@@ -104,7 +105,7 @@ impl RefineLiteral {
         }
     }
 }
-#[derive(Clone)]
+#[derive(Clone,Debug)]
 pub enum BaseLiteral {
     BaseEq(usize),
     BaseNeq(HashSet<usize>)
@@ -160,7 +161,7 @@ impl BaseLiteral {
 }
 
 
-#[derive(Clone)]
+#[derive(Clone,Debug)]
 pub struct Spec {
     i:Cluster<usize>,
     f_to_disj:Graph<usize,usize,RefineLiteral>,//f(x),  disj[],  literal,  (and edge index is available)
@@ -185,6 +186,7 @@ impl Spec {
                 Vacant(x)=>{x.insert(BaseLiteral::from(&lit));}
             }
             let we = self.f_to_disj.iter_a(a).map(|(x,z,y)|(x.clone(),z,y)).collect::<Vec<_>>().into_iter();
+            // println!("checkpoint 1!")
             for (lit2,l1,clu) in we {
                 if lit.implies(&lit2) {
                     for (_,l2,_) in self.f_to_disj.remove_b(clu) {
@@ -321,6 +323,7 @@ impl Spec {
         } false
     }
     pub fn refine_disjoint(&mut self,mut lits:Vec<(usize,RefineLiteral)>)->bool {
+        println!("refining disjoint! {:#?} {:?}",self,lits);
         let mut encount = 0;
         let mut l_i = 0;
         let mut remv = Vec::new();
@@ -329,7 +332,7 @@ impl Spec {
                 if x.implies(&lit) {return true;}
                 if x.conflicts(&lit) {remv.push(i);continue;}
                 l_i=i;encount+=1;
-            }
+            } else {l_i=i;encount+=1;}
         }
         if encount==0 {return false}
         if encount==1 {let (a,lit) = lits.remove(l_i);return self.refine(a,lit);}

@@ -167,7 +167,7 @@ impl<A:VerySimple,B:VerySimple,E> Default for GraphBox<A,B,E> {
 #[derive(Clone)]
 pub struct Graph<A:VerySimple,B:VerySimple,E> {
     allocator:Vec<GraphBox<A,B,E>>,//top left bottom right
-    aside:HashMap<A,usize>,
+    pub aside:HashMap<A,usize>,
     bside:HashMap<B,usize>,
     freefirst:Option<usize>,
     // direct:HashMap<(A,B),HashSet<usize>>

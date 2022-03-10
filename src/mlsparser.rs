@@ -58,23 +58,41 @@ fn padsymbol(ma: &str) -> IResult<&str, &str> {terminated(symbol,commentful_mult
 
 
 pub enum Type<'a> {
-    StarType(Box<Type<'a>>,Box<Type<'a>>),
+    StarType(Vec<Type<'a>>),
     ArrowType(Box<Type<'a>>,Box<Type<'a>>),
     IdentType(&'a str)
 }
 use Type::{*};
 fn type_parser<'a>(input: &'a str) -> IResult<&'a str,Type<'a>> {
+    map(separated_list1(
+        white_tag("*"),
+        map(tuple((
+            alt((
+                delimited(white_tag("("),type_parser,white_tag(")")),
+                map(padsymbol,|x|IdentType(x))
+            )),
+            opt(preceded(white_tag("->"),type_parser))
+        )),|(x,y)|match y {
+            None=>x,
+            Some(y)=>ArrowType(Box::new(x),Box::new(y))
+        })
+    ),|mut u|if u.len()==1 {u.remove(0)} else {StarType(u)})(input)
+}
+
+fn inner_type_parser<'a>(input: &'a str) -> IResult<&'a str,Type<'a>> {
     map(tuple((
         alt((
-            delimited(white_tag("("),type_parser,white_tag(")")),
+            map(delimited(white_tag("("),separated_list1(
+                white_tag("*"),inner_type_parser),white_tag(")")),|mut u|if u.len()==1 {u.remove(0)} else {StarType(u)}),
             map(padsymbol,|x|IdentType(x))
         )),
-        opt(tuple((alt((map(white_tag("->"),|_|true),map(white_tag("*"),|_|false))),type_parser)))
+        opt(preceded(white_tag("->"),inner_type_parser))
     )),|(x,y)|match y {
         None=>x,
-        Some((z,y))=>if z {ArrowType(Box::new(x),Box::new(y))} else {StarType(Box::new(x),Box::new(y))}
+        Some(y)=>ArrowType(Box::new(x),Box::new(y))
     })(input)
 }
+
 pub enum Value<'a> {
     NumericValue(usize),
     IdentValue(&'a str),
@@ -153,7 +171,7 @@ fn program_parser<'a>(input: &'a str) -> IResult<&'a str,Program<'a>> {
 pub enum Line<'a> {
     IncludeLine(&'a str),
     LetLine(&'a str,Program<'a>),
-    TypeLine(&'a str,Vec<(&'a str,Option<Type<'a>>)>),
+    TypeLine(&'a str,Vec<(&'a str,Vec<Type<'a>>)>),
 }
 use Line::{*};
 pub fn line_parser<'a>(input: &'a str) -> IResult<&'a str,Line<'a>> {
@@ -169,7 +187,8 @@ pub fn line_parser<'a>(input: &'a str) -> IResult<&'a str,Line<'a>> {
             padsymbol,
             preceded(white_tag("="),prepipe_delimited(tuple((
                 padsymbol,
-                opt(preceded(white_tag("of"),type_parser))
+                map(opt(preceded(white_tag("of"), separated_list1(
+                    white_tag("*"), inner_type_parser) )),|u|u.unwrap_or_default())
             ))))
         ))),|(x,y)|TypeLine(x,y))
     ))(input)

@@ -22,18 +22,14 @@ use ProcValue::{*};
 use ProcType::{*};
 use SpecVariant::{*};
 use RefineLiteral::{*};
-use Constname::{*};
 
 
 
 
 #[derive(Clone,Debug)]
 pub enum ProcPattern {
-    LPat(Box<ProcPattern>),
-    RPat(Box<ProcPattern>),
-    PairPat(Box<ProcPattern>,Box<ProcPattern>),
-    Unit,
-    VarPat(String)
+    CPat(usize,Vec<ProcPattern>),
+    VarPat(usize,String)
 }
 use ProcPattern::{*};
 
@@ -45,16 +41,10 @@ pub enum Dsl {
     AccessStack(usize),
     ApplyStack(Box<Dsl>,Vec<Dsl>),
 
-    Lside(Box<Dsl>),
-    Rside(Box<Dsl>),
-    Pair(Box<Dsl>,Box<Dsl>),
+    Deconstruct(usize,usize,Box<Dsl>),
+    Construct(usize,Vec<Dsl>),
     BaseValue(usize),
-    
-    SwitchValue(Box<Dsl>,Box<Dsl>,Box<Dsl>),
-    LUndo(Box<Dsl>),
-    RUndo(Box<Dsl>),
-    LeftValue(Box<Dsl>),
-    RightValue(Box<Dsl>),
+    SwitchValue(Box<Dsl>,Vec<Dsl>),
 
     EqProg(Box<Dsl>,Box<Dsl>),
     NeqProg(Box<Dsl>,Box<Dsl>)
@@ -62,17 +52,8 @@ pub enum Dsl {
 use Dsl::{*};
 
 
-pub enum SwitchShortResult {
-    Undecided,
-    SwitchLeft,
-    SwitchRight,
-    Die
-}
-use SwitchShortResult::{*};
-
-
 impl ExpressionBuilder {
-    pub fn get_transferstack(&mut self,a:Dsl,b:usize) -> Dsl {//this attempts eta-reduction, immensely helpful to the algorithm because of the function caches
+    pub fn get_transferstack(&mut self,a:Dsl,b:usize) -> Dsl {//this attempts eta-reduction, helpful to the algorithm because of the function caches
         match a {
             ApplyStack(a,l) if l.len()==b => match *a {
                 BaseValue(f)=>{
@@ -91,7 +72,6 @@ impl ExpressionBuilder {
     pub fn get_applied(&mut self,a:Dsl,b:Vec<Dsl>) -> Dsl {
         if b.len()==0 {return a}
         match a {
-            Pair(..)|Lside(..)|Rside(..) => {panic!("{:#?} {:#?}",a,b)},
             ApplyStack(a,b2) => self.get_applied(*a,b2.into_iter().chain(b.into_iter()).collect()),
             TransferStack(prog,amt)=>{
                 let blen = b.len();
@@ -132,119 +112,75 @@ impl ExpressionBuilder {
             f => ApplyStack(Box::new(f),b)
         }
     }
-    pub fn get_left_value(&mut self,a:Dsl) -> Dsl {
+    pub fn get_deconstructor(&mut self,x:usize,y:usize,a:Dsl) -> Dsl {
         match a {
-            Pair(a,_) => *a,
+            Construct(a,mut b) if a==x => b.remove(y),
             BaseValue(a) => match &self.values[a].0 {
                 Uneval => BaseValue(0),
-                PairValue(a,_) => BaseValue(*a),
-                _=>LeftValue(Box::new(BaseValue(a)))
+                Const(j,i) if *j==x => BaseValue(i[y]),
+                _=>Deconstruct(x,y,Box::new(BaseValue(a)))
             }
-            a=>LeftValue(Box::new(a))
+            a=>Deconstruct(x,y,Box::new(a))
         }
     }
-    pub fn get_right_value(&mut self,a:Dsl) -> Dsl {
-        match a {
-            Pair(_,a) => *a,
-            BaseValue(a) => match &self.values[a].0 {
-                Uneval => BaseValue(0),
-                PairValue(_,a) => BaseValue(*a),
-                _=>RightValue(Box::new(BaseValue(a)))
-            }
-            a=>RightValue(Box::new(a))
+    pub fn get_tuple_prog(&mut self,b:Vec<Dsl>,types:Vec<usize>) -> (usize,usize,Dsl) {
+        let (t,a) = self.get_tuple_type(types);
+        if b.iter().all(|x|if let BaseValue(_)=x {true} else {false}) {
+            return (t,a,BaseValue(self.get_constructed(a,b.into_iter().map(|x|if let BaseValue(x)=x {x} else {panic!()}).collect())))
         }
+        (t,a,Construct(a,b))
     }
-    pub fn get_pair_prog(&mut self,a:Dsl,b:Dsl) -> Dsl {
-        match (a,b) {
-            (BaseValue(a),BaseValue(b)) => BaseValue(self.get_pair(a,b)),
-            (a,b) => Pair(Box::new(a),Box::new(b))
+    pub fn get_construct_prog(&mut self,a:usize,b:Vec<Dsl>) -> Dsl {
+        if b.iter().all(|x|if let BaseValue(_)=x {true} else {false}) {
+            return BaseValue(self.get_constructed(a,b.into_iter().map(|x|if let BaseValue(x)=x {x} else {panic!()}).collect()))
         }
+        Construct(a,b)
     }
-    pub fn get_l_prog(&mut self,a:Dsl) -> Dsl {
-        match a {
-            BaseValue(a) => BaseValue(self.get_l(a)),
-            a => Lside(Box::new(a))
-        }
-    }
-    pub fn get_r_prog(&mut self,a:Dsl) -> Dsl {
-        match a {
-            BaseValue(a) => BaseValue(self.get_r(a)),
-            a => Rside(Box::new(a))
-        }
-    }
-    pub fn get_undo_left(&self,a:Dsl) -> Dsl {
-        match a {
-            BaseValue(a) => match &self.values[a].0 {
-                Uneval => BaseValue(0),
-                LValue(v) => BaseValue(*v),
-                _=>LUndo(Box::new(BaseValue(a)))
-            }
-            a=>LUndo(Box::new(a))
-        }
-    }
-    pub fn get_undo_right(&self,a:Dsl) -> Dsl {
-        match a {
-            BaseValue(a) => match &self.values[a].0 {
-                Uneval => BaseValue(0),
-                RValue(v) => BaseValue(*v),
-                _=>RUndo(Box::new(BaseValue(a)))
-            }
-            a=>RUndo(Box::new(a))
-        }
-    }
-    pub fn switch_short(&self,ch:&Dsl) -> SwitchShortResult {
+    pub fn switch_short(&self,ch:&Dsl) -> Option<Option<usize>> {
         match ch {
-            Lside(_) => SwitchLeft,
-            Rside(_) => SwitchRight,
+            Construct(y,_) => Some(Some(self.constructors[*y].index)),
             BaseValue(v) => match &self.values[*v].0 {
-                Uneval => Die,
-                LValue(_) => SwitchLeft,
-                RValue(_) => SwitchRight,
-                _=>panic!()
+                Uneval=> Some(None),
+                Const(y,_) => Some(Some(self.constructors[*y].index)),
+                _=>None
             }
-            _=>Undecided
+            _=>None
         }
     }
-    pub fn get_switch(&self,ch:Dsl,a:Dsl,b:Dsl) -> Dsl {
+    pub fn get_switch(&self,ch:Dsl,mut a:Vec<Dsl>) -> Dsl {
         match self.switch_short(&ch) {
-            Die => BaseValue(0),
-            SwitchLeft => a,
-            SwitchRight => b,
-            Undecided => {
-                if let BaseValue(x) = a {
-                    if x==0 {return b}
+            Some(None) => BaseValue(0),
+            Some(Some(x)) => a.remove(x),
+            None => {
+                let mut nocount = 0;
+                let mut j = 0;
+                for (i,b) in a.iter().enumerate() {
+                    if let BaseValue(x) = b {
+                        if *x==0 {
+                            nocount+=1;
+                            j=i;
+                        }
+                    }
                 }
-                if let BaseValue(x) = b {
-                    if x==0 {return a}
-                }
-                SwitchValue(Box::new(ch),Box::new(a),Box::new(b))
+                if nocount==0 {return BaseValue(0)}
+                if nocount==1 {return a.remove(j)}
+                SwitchValue(Box::new(ch),a)
             }
         }
-    }
-    pub fn create_bool_defn(&mut self) -> (usize,usize,usize) {//true, false, boolean
-        (
-            self.get_r(1),
-            self.get_l(1),
-            self.get_lr_type(self.get_unit_type(),self.get_unit_type())
-        )
     }
     pub fn get_eq(&mut self,a:Dsl,b:Dsl) -> Dsl {
+        let bb = self.force_get_bool();
+        let falsetrue = self.get_constructors_for(bb);
         match (a,b) {
-            (BaseValue(a),BaseValue(b)) => BaseValue(if a==b {
-                self.create_bool_defn().0
-            } else {
-                self.create_bool_defn().1
-            }),
+            (BaseValue(a),BaseValue(b)) => BaseValue(falsetrue[if a==b {1} else {0}]),
             (a,b) => EqProg(Box::new(a),Box::new(b))
         }
     }
     pub fn get_neq(&mut self,a:Dsl,b:Dsl) -> Dsl {
+        let bb = self.force_get_bool();
+        let falsetrue = self.get_constructors_for(bb);
         match (a,b) {
-            (BaseValue(a),BaseValue(b)) => BaseValue(if a!=b {
-                self.create_bool_defn().0
-            } else {
-                self.create_bool_defn().1
-            }),
+            (BaseValue(a),BaseValue(b)) => BaseValue(falsetrue[if a!=b {1} else {0}]),
             (a,b) => NeqProg(Box::new(a),Box::new(b))
         }
     }
@@ -286,53 +222,24 @@ impl ExpressionBuilder {
                 self.get_applied(we,lp)
             }
             BaseValue(a)=>BaseValue(*a),
-            Lside(a)=>{
-                let w = self.substitute(a,amt,lim,sub);
-                self.get_l_prog(w)
+            Construct(x,a)=>{
+                let w = a.iter().map(|b|self.substitute(b,amt,lim,sub.clone())).collect();
+                self.get_construct_prog(*x,w)
             }
-            Rside(a)=>{
-                let w = self.substitute(a,amt,lim,sub);
-                self.get_r_prog(w)
-            }
-            Pair(a,b)=>{
-                let u = self.substitute(a,amt,lim,sub.clone());
-                let v = self.substitute(b,amt,lim,sub);
-                self.get_pair_prog(u,v)
-            }
-            SwitchValue(c,a,b)=>{
+            SwitchValue(c,a)=>{
                 let u = self.substitute(c,amt,lim,sub.clone());
                 match self.switch_short(&u) {
-                    Die => BaseValue(0),
-                    Undecided=>{
-                        let v = self.substitute(a,amt,lim,sub.clone());
-                        let w = self.substitute(b,amt,lim,sub);
-                        if let BaseValue(x) = v {
-                            if x==0 {return w}
-                        }
-                        if let BaseValue(x) = w {
-                            if x==0 {return v}
-                        }
-                        SwitchValue(Box::new(u),Box::new(v),Box::new(w))
+                    Some(None) => BaseValue(0),
+                    None=>{
+                        let w = a.iter().map(|b|self.substitute(b,amt,lim,sub.clone())).collect();
+                        self.get_switch(u,w)
                     }
-                    SwitchLeft=>self.substitute(a,amt,lim,sub),
-                    SwitchRight=>self.substitute(b,amt,lim,sub)
+                    Some(Some(u))=>self.substitute(&a[u],amt,lim,sub),
                 }
             }
-            LUndo(a)=>{
+            Deconstruct(x,y,a)=>{
                 let w = self.substitute(a,amt,lim,sub);
-                self.get_undo_left(w)
-            }
-            RUndo(a)=>{
-                let w = self.substitute(a,amt,lim,sub);
-                self.get_undo_right(w)
-            }
-            LeftValue(a)=>{
-                let w = self.substitute(a,amt,lim,sub);
-                self.get_left_value(w)
-            }
-            RightValue(a)=>{
-                let w = self.substitute(a,amt,lim,sub);
-                self.get_right_value(w)
+                self.get_deconstructor(*x,*y,w)
             }
             EqProg(a,b)=>{
                 let u = self.substitute(a,amt,lim,sub.clone());
@@ -354,14 +261,9 @@ impl ExpressionBuilder {
             TransferStack(a,b)=>TransferStack(Self::bbump(a,amt,lim+b),*b),
             ApplyStack(a,b)=>ApplyStack(Self::bbump(a,amt,lim),b.into_iter().map(|x|Self::bump(x,amt,lim)).collect()),
             BaseValue(a)=>BaseValue(*a),
-            Lside(a)=>Lside(Self::bbump(a,amt,lim)),
-            Rside(a)=>Rside(Self::bbump(a,amt,lim)),
-            Pair(a,b)=>Pair(Self::bbump(a,amt,lim),Self::bbump(b,amt,lim)),
-            SwitchValue(a,b,c)=>SwitchValue(Self::bbump(a,amt,lim),Self::bbump(b,amt,lim),Self::bbump(c,amt,lim)),
-            LUndo(a)=>LUndo(Self::bbump(a,amt,lim)),
-            RUndo(a)=>RUndo(Self::bbump(a,amt,lim)),
-            LeftValue(a)=>LeftValue(Self::bbump(a,amt,lim)),
-            RightValue(a)=>RightValue(Self::bbump(a,amt,lim)),
+            Construct(x,b)=>Construct(*x,b.into_iter().map(|x|Self::bump(x,amt,lim)).collect()),
+            SwitchValue(a,b)=>SwitchValue(Self::bbump(a,amt,lim),b.into_iter().map(|x|Self::bump(x,amt,lim)).collect()),
+            Deconstruct(x,y,a)=>Deconstruct(*x,*y,Self::bbump(a,amt,lim)),
             NeqProg(a,b)=>NeqProg(Self::bbump(a,amt,lim),Self::bbump(b,amt,lim)),
             EqProg(a,b)=>EqProg(Self::bbump(a,amt,lim),Self::bbump(b,amt,lim))
         }
@@ -381,8 +283,7 @@ struct FileInterpreter {
     basepath:PathBuf,
     types:HashMap<String,usize>,
     functions:HashMap<String,(Dsl,usize)>,
-    nullary_constr:HashMap<String,ProcPattern>,
-    unary_constr:HashMap<String,Vec<bool>>
+    constructors:HashMap<String,usize>
 }
 pub fn interpret_file(fullpath:PathBuf) -> (ExpressionBuilder,SpecVariant,(usize,usize)) {
     let contents = read_to_string(fullpath.clone()).expect("Something went wrong reading the file");
@@ -393,19 +294,20 @@ pub fn interpret_file(fullpath:PathBuf) -> (ExpressionBuilder,SpecVariant,(usize
         basepath:fullpath.parent().unwrap().to_path_buf(),
         types:HashMap::new(),
         functions:HashMap::new(),
-        nullary_constr:HashMap::new(),
-        unary_constr:HashMap::new()
+        constructors:HashMap::new()
     };
-    for line in parsed.earlier_lines {fi.process_line(line);}
+    let mut pel = parsed.earlier_lines;
+    fi.early_process_bools_and_nats(&mut pel);
+    for line in pel {fi.process_line(line);}
     fi.purge();
     let ty = fi.process_type(parsed.synth_type);
     let (argtype,restype) = uncurry(&mut fi.expr,ty);
     let sp = match parsed.spec_type {
         IOSpec(l)=>{
             let mut s = Spec::new();
-            for (args,res) in l {
+            for (mut args,res) in l {
                 let context = Rc::new(ExpressionContext{exprs:HashMap::new()});
-                let (args,argstype) = fi.process_program(context.clone(),TupleProg(args));
+                let (args,argstype) = fi.process_program(context.clone(),if args.len()==1 {args.remove(0)} else {TupleProg(args)});
                 let (res,rtype) = fi.process_program(context,res);
                 let args = match args {
                     BaseValue(v)=>v,_=>panic!("only basic values allowed as IO examples.")
@@ -413,19 +315,20 @@ pub fn interpret_file(fullpath:PathBuf) -> (ExpressionBuilder,SpecVariant,(usize
                 let res = match res {
                     BaseValue(v)=>v,_=>panic!("only basic values allowed as IO examples.")
                 };
-                if argstype != argtype {panic!("argument has incompatible type")}
-                if rtype != restype {panic!("example has incompatible type")}
+                if argstype != argtype {panic!("argument has incompatible type. Expected: {:?} Got: {:?}",DebugType{t:argtype,expr:&fi.expr,depth:55},DebugType{t:argstype,expr:&fi.expr,depth:55})}
+                if rtype != restype {panic!("example has incompatible type. Expected: {:?} Got: {:?}",DebugType{t:restype,expr:&fi.expr,depth:55},DebugType{t:rtype,expr:&fi.expr,depth:55})}
                 s.refine(args,EqLit(res));
             }
             JustIO(s)
         },
-        LogicalSpec(f)=>{
-            let ty = fi.expr.create_bool_defn().2;
-            let inner = fi.expr.get_arrow_type(restype,ty);
-            let destype = fi.expr.get_arrow_type(argtype,inner);
-            let (av,at) = fi.process_function(f);
-            if destype != at {panic!("logical function has incompatible type")}
-            ConfirmWithFunc(Spec::new(),av)
+        LogicalSpec(..)=>{
+            panic!()
+            // let ty = fi.expr.create_bool_defn().2;
+            // let inner = fi.expr.get_arrow_type(restype,ty);
+            // let destype = fi.expr.get_arrow_type(argtype,inner);
+            // let (av,at) = fi.process_function(f);
+            // if destype != at {panic!("logical function has incompatible type")}
+            // ConfirmWithFunc(Spec::new(),av)
         },
         RefSpec(f)=>{
             let av = fi.process_uncurried_function(f,ty,argtype);
@@ -448,21 +351,27 @@ fn to_uncurry_frags(expr:&mut ExpressionBuilder,mut a:usize) -> (Vec<usize>,usiz
     (args,res)
 }
 fn uncurry(expr:&mut ExpressionBuilder,a:usize) -> (usize,usize) {
-    let (args,res) = to_uncurry_frags(expr,a);
-    let mut aar = None;
-    for a in args.into_iter().rev() {
-        match aar {
-            None=>{aar=Some(a)}
-            Some(b)=>(aar=Some(expr.get_pair_type(a,b)))
-        }
-    }
-    (aar.expect("given synthesis type isn't a function"),res)
+    let (mut args,res) = to_uncurry_frags(expr,a);
+    if args.len()==0 {panic!("given synthesis type isn't a function")}
+    let aar = if args.len()==1 {args.remove(0)} else {expr.get_tuple_type(args).0};
+    (aar,res)
 }
 impl FileInterpreter {
     fn purge(&self) {
         for (k,v) in self.types.iter() {
             if let Placeholder = &self.expr.types[*v] {
                 panic!("Type name not found: {}",k);
+            }
+        }
+    }
+    fn early_process_bools_and_nats(&mut self,line:&mut Vec<Line>) {
+        let mut i=0;
+        while i<line.len() {
+            match &line[i] {
+                TypeLine(name,_) if *name=="bool" || *name=="nat" => {
+                    self.process_line(line.remove(i))
+                }
+                _=>{i+=1}
             }
         }
     }
@@ -477,80 +386,49 @@ impl FileInterpreter {
             TypeLine(name,constructors) => {
                 let cln = constructors.len();
                 if cln==0 {panic!()}
-                let mut obby : Option<usize> = None;
-                let mut cstrnames : Option<Constname> = None;
-                let mut interim = Vec::new();
-                for (i,(cstr,l)) in constructors.into_iter().enumerate().rev() {
-                    let isl = l.is_some();
-                    let (bb,cpath) = match l {
-                        None=>{
-                            let calc = (0..cln-1).rev().fold(1,|b,x|if i>x {self.expr.get_r(b)} else if i==x {self.expr.get_l(b)} else {b});
-                            if cstr=="False" {
-                                if let Some(k) = self.expr.falseval {
-                                    if k != calc {panic!("Equality operators have been used before definition of boolean types, AND those boolean types betray convention. (make False come before True or define bools earlier).")}
-                                }
-                                self.expr.falseval=Some(calc)
-                            }
-                            if cstr=="True" {
-                                if let Some(k) = self.expr.trueval {
-                                    if k != calc {panic!("Equality operators have been used before definition of boolean types, AND those boolean types betray convention. (make False come before True or define bools earlier).")}
-                                }
-                                self.expr.trueval=Some(calc)
-                            }
-                            self.nullary_constr.insert(cstr.to_string(),(0..cln-1).rev().fold(Unit,|b,x|if i>x {RPat(Box::new(b))} else if i==x {LPat(Box::new(b))} else {b}));
-                            (//1 is the unit value
-                                self.expr.get_unit_type(),
-                                BaseValue(calc)
-                            )
-                        },
-                        Some(x)=>{
-                            self.unary_constr.insert(cstr.to_string(),(0..cln-1).rev().filter_map(|x|if i>x {Some(true)} else if i==x {Some(false)} else {None}).collect());
-                            (
-                                self.process_type(x),
-                                TransferStack(Box::new((0..cln-1).rev().fold(AccessStack(0),|b,x|if i>x {Rside(Box::new(b))} else if i==x {Lside(Box::new(b))} else {b})),1)
-                            )
-                        }
-                    };
-                    interim.push((cstr.to_string(),cpath,if isl {Some(bb)} else {None}));
-                    match obby {
-                        None => {obby = Some(bb);}
-                        Some(x) => {
-                            let mut ttt = false;
-                            if i==0 {
-                                if let Some(y) = self.types.get(name) {
-                                    if let Placeholder = &self.expr.types[*y] {
-                                        ttt=true;
-                                        self.expr.place_lr_type_in_placeholder(bb,x,*y);
-                                        obby = Some(*y);
-                                    }
-                                }
-                            }
-                            if !ttt {obby = Some(self.expr.get_lr_type(bb,x));}
-                        }
-                    }
-                    match cstrnames {
-                        None => {cstrnames=Some(if isl
-                            {UnaryName(String::from(cstr))} else
-                            {NullaryName(String::from(cstr))}
-                        );}
-                        Some(x) => {
-                            cstrnames=Some(LRSplit(Box::new(if isl
-                                {UnaryName(String::from(cstr))} else
-                                {NullaryName(String::from(cstr))}),
-                            Box::new(x)));
-                        }
+                // let mut interim = Vec::new();
+                let mut bb : Vec<Vec<usize>> = Vec::new();
+                let mut names : Vec<String> = Vec::new();
+                for (cst,l) in constructors.into_iter() {
+                    bb.push(l.into_iter().map(|x|self.process_type(x)).collect());
+                    names.push(String::from(cst));
+                }
+                let (consts,obby) = if let Some(y) = self.types.get(name) {
+                    if let Placeholder = &self.expr.types[*y] {
+                        (self.expr.place_type_in_placeholder(*y,bb.clone(),names),*y)
+                    } else {panic!("type already defined!")}
+                } else {
+                    let y = self.expr.get_placeholder_type();
+                    self.types.insert(name.to_string(),y);
+                    (self.expr.place_type_in_placeholder(y,bb.clone(),names),y)
+                };
+                if name=="bool" {
+                    self.expr.bool_type = Some(obby);
+                }
+                if name=="nat" {
+                    self.expr.nat_type = Some(obby);
+                }
+                for cstr in consts {
+                    let f = &self.expr.constructors[cstr];
+                    let fname = f.name.clone().unwrap();
+                    if f.argtypes.len()==0 {
+                        self.functions.insert(fname,(BaseValue(self.expr.get_constructed(cstr,Vec::new())),obby));
+                    } else if f.argtypes.len()==1 {
+                        let farg = f.argtypes[0];
+                        let ntyp = self.expr.get_arrow_type(farg,obby);
+                        let nval = TransferStack(Box::new(Construct(cstr,vec![AccessStack(0)])),1);
+                        self.functions.insert(fname,(nval,ntyp));
+                    } else {
+                        let fclone = f.argtypes.clone();
+                        let (ttype,tconst) = self.expr.get_tuple_type(fclone);
+                        let ntyp = self.expr.get_arrow_type(ttype,obby);
+                        let f = &self.expr.constructors[cstr];
+                        let fargs = (0..f.argtypes.len()).map(|w|Deconstruct(tconst,w,Box::new(AccessStack(0)))).collect();
+                        let nval = TransferStack(Box::new(Construct(cstr,fargs)),1);
+                        self.functions.insert(fname,(nval,ntyp));
                     }
                 }
-                for (a,b,c) in interim {
-                    let ntype = match c {
-                        Some(c) => self.expr.get_arrow_type(c,obby.unwrap()),
-                        None => obby.unwrap()
-                    };
-                    self.functions.insert(a,(b,ntype));
-                }
-                self.expr.debug_constr_names.insert(obby.unwrap(),cstrnames.unwrap());
-                self.types.insert(name.to_string(),obby.unwrap());
-                self.expr.debug_type_names.insert(obby.unwrap(),name.to_string());
+                self.expr.debug_type_names.insert(obby,name.to_string());
             }
             LetLine(name,program) => {
                 let (vv,at) = self.process_function(program);
@@ -563,22 +441,15 @@ impl FileInterpreter {
         let (args,resultant) = to_uncurry_frags(&mut self.expr,curried_type);
         let x = args.len();
         let mut context = ExpressionContext{exprs:HashMap::new()};
+        let (_,cstrv,deed) = self.expr.get_tuple_prog((0..x).map(|y|AccessStack(y)).collect(),args.clone());
         match program {
             FixpointProg(innername,innertype,prog) => {
                 let ty = self.process_type(innertype);
                 if ty != curried_type {panic!("type doesn't match synthesis type")}
                 program = *prog;
-                let mut pregadget = None;
-                for y in (0..x).rev() {
-                    let a = AccessStack(y);
-                    match pregadget {
-                        None=>{pregadget=Some(a);}
-                        Some(b)=>{pregadget=Some(Pair(Box::new(a),Box::new(b)));}
-                    }
-                }
                 let fplc = self.expr.get_function_placeholder();
                 let gadget = self.expr.get_transferstack(ApplyStack(
-                    Box::new(BaseValue(fplc)),vec![pregadget.unwrap()]
+                    Box::new(BaseValue(fplc)),vec![deed]
                 ),1);
                 context.exprs.insert(innername.to_string(),(gadget,ty,0));
             }
@@ -590,10 +461,7 @@ impl FileInterpreter {
                 FunProg(arg,argtype,inner)=>{
                     let nty = self.process_type(argtype);
                     if nty != args[i] {panic!("type doesn't match synthesis type")}
-                    let thaf = (0..x-1).rev().fold(
-                        AccessStack(0),
-                        |b,x|if i>x {RUndo(Box::new(b))} else if i==x {LUndo(Box::new(b))} else {b}
-                    );
+                    let thaf = Deconstruct(cstrv,i,Box::new(AccessStack(0)));
                     i+=1;
                     context.exprs.insert(arg.to_string(),(thaf,nty,0));
                     program = *inner;
@@ -612,10 +480,7 @@ impl FileInterpreter {
                         }
                         _=>panic!("type doesn't match synthesis type")
                     }
-                    (0..x-1).rev().fold(
-                        AccessStack(0),
-                        |b,x|if i>x {self.expr.get_r_prog(b)} else if i==x {self.expr.get_l_prog(b)} else {b}
-                    )
+                    self.expr.get_construct_prog(i,vec![AccessStack(0)])
                 }).collect()
             );
         }
@@ -656,10 +521,9 @@ impl FileInterpreter {
                     a
                 }
             }.clone(),
-            StarType(a,b) => {
-                let at = self.process_type(*a);
-                let bt = self.process_type(*b);
-                self.expr.get_pair_type(at,bt)
+            StarType(b) => {
+                let innerp = b.into_iter().map(|z|self.process_type(z)).collect();
+                self.expr.get_tuple_type(innerp).0
             }
             Type::ArrowType(a,b) => {
                 let at = self.process_type(*a);
@@ -668,45 +532,53 @@ impl FileInterpreter {
             }
         }
     }
-    fn process_pattern(&self,x:Value) -> ProcPattern {
+    fn process_pattern(&mut self,x:Value,t:usize) -> ProcPattern {
         match x {
             NumericValue(amt) => {
-                let mut base = LPat(Box::new(Unit));
-                for _ in 0..amt {base = RPat(Box::new(base));} base
+                let bb = self.expr.force_get_nat();
+                let os = self.expr.get_constructors_for(bb);
+                let mut base = CPat(os[0],Vec::new());
+                for _ in 0..amt {base = CPat(os[1],vec![base]);} base
             }
             IdentValue(name) => {
-                if let Some(x) = self.nullary_constr.get(name) {return x.clone()}
-                if let Some(_) = self.unary_constr.get(name) {panic!("that constructor takes arguments");}
-                VarPat(name.to_string())
+                if let Some(x) = self.constructors.get(name) {
+                    let f = &self.expr.constructors[*x];
+                    if f.argtypes.len()>0 {panic!("that constructor takes arguments!");}
+                    return CPat(*x,Vec::new());
+                }
+                VarPat(t,name.to_string())
             },
             AppValue(mut l) => {
                 let name = match l.remove(0) {
                     IdentValue(k)=>k,
                     _=>panic!("not a valid constructor")
                 };
-                let param = if l.len()==1 {
-                    self.process_pattern(l.remove(0))
-                } else {
-                    self.process_pattern(AppValue(l))
-                };
-                if let Some(x) = self.unary_constr.get(name) {
-                    return x.iter().fold(param,|b,x|if *x {RPat(Box::new(b))} else {LPat(Box::new(b))})
-                }
-                if let Some(x) = self.nullary_constr.get(name) {//gotta tolerate this even though it's wrong
-                    return x.clone();
+                if let Some(x) = self.constructors.get(name) {
+                    let x=*x;
+                    let f = &self.expr.constructors[x];
+                    if f.argtypes.len()>0 {
+                        if f.argtypes.len()!=1 {panic!("only nullary constructors are expected from the benchmarks... (but are totally supported under the hood)");}
+                        let far = f.argtypes[0];
+                        let param = if l.len()==1 {
+                            self.process_pattern(l.remove(0),far)
+                        } else {
+                            self.process_pattern(AppValue(l),far)
+                        };
+                        CPat(x,vec![param]);
+                    } else {
+                        return CPat(x,Vec::new());
+                    }
                 }
                 panic!("constructor name not found")
             }
             TupleValue(l) => {
-                let mut obby : Option<ProcPattern> = None;
-                for sub in l.into_iter().rev() {
-                    let pat = self.process_pattern(sub);
-                    match obby {
-                        None => {obby = Some(pat);}
-                        Some(p) => {obby = Some(PairPat(Box::new(pat),Box::new(p)));}
-                    }
-                }
-                obby.unwrap()
+                let cl = self.expr.get_constructors_for(t);
+                if cl.len()!=1 {panic!("tuple not expected here!")}
+                let f = &self.expr.constructors[cl[0]];
+                if f.argtypes.len()!=l.len() {panic!("wrong number of arguments for tuple!");}
+                // let (a,b) : (Vec<_>,Vec<_>) = l.into_iter().map(|x|self.process_pattern(x)).unzip();
+                // self.expr.get_tuple_type();
+                CPat(cl[0],l.into_iter().zip(f.argtypes.clone().into_iter()).map(|(p,t)|self.process_pattern(p,t)).collect())
             }
         }
     }
@@ -729,6 +601,7 @@ impl FileInterpreter {
                     match &self.expr.types[wt] {
                         ProcType::ArrowType(a,b) => {
                             if *a != t {
+                                println!("{:#?}",self.expr.types);
                                 println!("\nfunction type: {:#?}\n",DebugType{t:glgl,expr:&self.expr,depth:5});
                                 println!("\nexpected: {:#?}\nrecieved: {:#?}\n",DebugType{t:*a,expr:&self.expr,depth:5},DebugType{t:t,expr:&self.expr,depth:5});
                                 panic!("invalid type for argument: {:#?}, all args: {:#?}",lv[i],lv)
@@ -741,20 +614,16 @@ impl FileInterpreter {
                 (self.expr.get_applied(wv,lv),wt)
             }
             NumericProg(amt) => {
-                let mut base = self.expr.get_l(self.expr.get_unit_value());
-                for _ in 0..amt {base = self.expr.get_r(base);}
-                (BaseValue(base),self.types.get("nat").expect("Integer notation not supported here").clone())
+                let bb = self.expr.force_get_nat();
+                let os = self.expr.get_constructors_for(bb);
+                let mut base = self.expr.get_constructed(os[0],Vec::new());
+                for _ in 0..amt {base = self.expr.get_constructed(os[1],vec![base]);}
+                (BaseValue(base),bb)
             }
             TupleProg(l) => {
-                let mut obby : Option<(Dsl,usize)> = None;
-                for sub in l.into_iter().rev() {
-                    let (av,at) = self.process_program(expr.clone(),sub);
-                    match obby {
-                        None => {obby = Some((av,at));}
-                        Some((bv,bt)) => {obby = Some((self.expr.get_pair_prog(av,bv),self.expr.get_pair_type(at,bt)));}
-                    }
-                }
-                obby.unwrap()
+                let (l,lt) : (Vec<_>,Vec<_>) = l.into_iter().map(|x|self.process_program(expr.clone(),x)).unzip();
+                let (b,bc) = self.expr.get_tuple_type(lt);
+                (self.expr.get_construct_prog(bc,l),b)
             }
             IdentProg(name) => {
                 if let Some((v,t,shift)) = expr.exprs.get(name) {
@@ -765,44 +634,37 @@ impl FileInterpreter {
                 panic!("no such symbol: {}",name)
             }
             AccProg(a,u) => {
-                let (mut wv,mut wt) = self.process_program(expr,*a);
-                for _ in 0..u {
-                    match &self.expr.types[wt] {
-                        PairType(_,b) => {
-                            wt=*b;
-                            wv = RightValue(Box::new(wv));
-                        }
-                        _=>panic!("arguments applied to non-function")
-                    }
-                }
-                match &self.expr.types[wt] {
-                    PairType(a,_) => {
-                        wv=LeftValue(Box::new(wv));
-                        wt=*a;
-                    }
-                    _=>{}
-                }
-                (wv,wt)
+                let (wv,wt) = self.process_program(expr,*a);
+                let cst = self.expr.get_constructors_for(wt);
+                if cst.len()!=1 {panic!("cannot unsafely access this value.")}
+                let far = self.expr.constructors[cst[0]].argtypes[u];
+                let w = self.expr.get_deconstructor(cst[0],u,wv);
+                (w,far)
             }
             ComparisonProg(a,b)=>{
                 let (av,at) = self.process_program(expr.clone(),*a);
                 let (bv,bt) = self.process_program(expr,*b);
                 if at != bt {panic!("cannot compare values of different types")}
-                (self.expr.get_eq(av,bv),self.expr.create_bool_defn().2)
+                (self.expr.get_eq(av,bv),self.expr.force_get_bool())
             }
             NegComparisonProg(a,b)=>{
                 let (av,at) = self.process_program(expr.clone(),*a);
                 let (bv,bt) = self.process_program(expr,*b);
                 if at != bt {panic!("cannot compare values of different types")}
-                (self.expr.get_neq(av,bv),self.expr.create_bool_defn().2)
+                (self.expr.get_neq(av,bv),self.expr.force_get_bool())
             }
             MatchProg(a,l) => {
-                let (pats,mut progs) : (Vec<_>,Vec<_>) = l.into_iter().map(|(v,p)|(self.process_pattern(v),NotFinished(Some(p)))).unzip();
+                enum FinishedOrNot<'a> {
+                    Finished(Dsl),
+                    NotFinished(Option<Program<'a>>)
+                }
+                use FinishedOrNot::{*};
+                let (av,at) = self.process_program(expr.clone(),*a);
+                let (pats,mut progs) : (Vec<_>,Vec<_>) = l.into_iter().map(|(v,p)|(self.process_pattern(v,at),NotFinished(Some(p)))).unzip();
                 fn inner<'a>(
                     s:&'a mut FileInterpreter,
                     mut queue:Vec<(Vec<(usize,&'a ProcPattern)>,HashMap<usize,(&'a String,usize)>,Dsl,usize)>,
-                    mut splitcandidates:Vec<(Vec<(usize,&'a ProcPattern)>,Vec<(usize,&'a ProcPattern)>,HashMap<usize,(&'a String,usize)>,bool,Dsl,usize)>,
-                    mut currentmin:Option<usize>,
+                    mut splitcandidates:Vec<(Vec<Vec<Vec<(usize,&'a ProcPattern)>>>,HashMap<usize,(&'a String,usize)>,usize,Dsl,usize)>,
                     mut stagnant:Vec<(Vec<(usize,&'a ProcPattern)>,HashMap<usize,(&'a String,usize)>,Dsl,usize)>,
                     allprogs:Vec<usize>,
                     commontype:&mut Option<usize>,
@@ -812,87 +674,79 @@ impl FileInterpreter {
                     while let Some((red,mut backvars,path,btype)) = queue.pop() {
                         if red.len()==0 {stagnant.push((red,backvars,path,btype));continue;}
                         match red[0].1 {
-                            PairPat(..)=>{
-                                let (l,r) : (Vec<_>,Vec<_>) = red.into_iter().filter_map(|(i,x)|match x{
-                                    PairPat(a,b)=>Some(((i,&**a),(i,&**b))),
-                                    VarPat(e)=>{backvars.insert(i,(e,btype));None}
-                                    _=>panic!("strange branch mismatch...")
-                                }).unzip();
-                                let (ltype,rtype) = match s.expr.types[btype] {
-                                    PairType(a,b)=>(a,b),
+                            CPat(red_j,_)=>{
+                                let whwh = s.expr.constructors[*red_j].index;
+                                let types = match &s.expr.types[btype] {
+                                    EnumType(b)=>b,
                                     _=>panic!("doesn't fit type...")
                                 };
-                                queue.push((l,backvars.clone(),LeftValue(Box::new(path.clone())),ltype));
-                                queue.push((r,backvars,RightValue(Box::new(path)),rtype));
-                            }
-                            LPat(_)|RPat(_) => {
-                                let whwh = if let LPat(_) = red[0].1 {true} else {false};
-                                let mut l : Vec<(usize,&ProcPattern)> = Vec::new();
-                                let mut r : Vec<(usize,&ProcPattern)> = Vec::new();
+                                let mut dvecs : Vec<Vec<Vec<_>>> = types.iter().map(|u|u.iter().map(|_|Vec::new()).collect()).collect();
                                 for (i,x) in red {
                                     match x {
-                                        LPat(x)=>{l.push((i,&*x))}
-                                        RPat(x)=>{r.push((i,&*x))}
-                                        VarPat(e)=>{backvars.insert(i,(e,btype));}
-                                        _=>panic!("strange branch mismatch...")
+                                        CPat(j,x)=>{
+                                            let f = &s.expr.constructors[*j];
+                                            if f.restype != btype {panic!("pattern var mismatch");}
+                                            for (h,x) in x.iter().enumerate() {
+                                                dvecs[f.index][h].push((i,x));
+                                            }
+                                        }
+                                        VarPat(k,e)=>{
+                                            if *k != btype {panic!("pattern var mismatch");}
+                                            backvars.insert(i,(e,btype));
+                                        }
                                     }
                                 }
-                                if let Some(x)=currentmin {
-                                    if l.len()+r.len()>=splitcandidates[x].0.len()+splitcandidates[x].1.len() {
-                                        currentmin=Some(splitcandidates.len());
+                                if dvecs.len()==1 {
+                                    for (i,(d,t)) in dvecs.remove(0).into_iter().zip(types[0].iter()).enumerate() {
+                                        queue.push((d,backvars.clone(),Deconstruct(0,i,Box::new(path.clone())),*t));
                                     }
                                 } else {
-                                    currentmin=Some(splitcandidates.len());
+                                    splitcandidates.push((dvecs,backvars,whwh,path,btype));
                                 }
-                                splitcandidates.push((l,r,backvars,whwh,path,btype));
                             }
                             VarPat(..)=>{stagnant.push((red,backvars,path,btype))}
-                            Unit=>{}
                         }
                     }
+                    let currentmin = splitcandidates.iter().enumerate().max_by_key(|&(_,(x,_,_,_,_))|x.iter().map(|o|o.len()).sum::<usize>()).map(|(i,_)|i);
                     if let Some(schbooey) = currentmin {
-                        let (lside,rside,backvars,firstelem,path,btype) = splitcandidates.swap_remove(schbooey);
-                        let forbid_left : HashSet<usize> = rside.iter().map(|(a,_)|*a).collect();
-                        let forbid_right : HashSet<usize> = lside.iter().map(|(a,_)|*a).collect();
-                        let mut queue_a : Vec<_> = stagnant.iter().cloned().map(|(mut x,s,w,j)|{
-                            x.retain(|(x,_)|!forbid_left.contains(x));
-                            (x,s,w,j)
+                        let (sides,backvars,firstelem,path,btype) = splitcandidates.swap_remove(schbooey);
+                        let forbids : Vec<HashSet<usize>> = (0..sides.len()).map(|ou|(0..sides.len()).filter(|k|*k!=ou).map(|u|sides[u][0].iter().map(|(a,_)|*a)).flatten().collect()).collect();
+                        let btypeconst = s.expr.get_constructors_for(btype);
+                        let branches : Vec<Dsl> = sides.into_iter().zip(forbids.into_iter()).enumerate().map(|(ou,(thisside,forbid))|{
+                            let mut newqueue : Vec<_> = stagnant.iter().cloned().map(|(mut x,s,w,j)|{
+                                x.retain(|(x,_)|!forbid.contains(x));
+                                (x,s,w,j)
+                            }).collect();
+                            let newsplit = splitcandidates.iter().cloned().map(|(mut x,s,u,w,j)|{
+                                for y in x.iter_mut() {
+                                    for z in y.iter_mut() {
+                                        z.retain(|(x,_)|!forbid.contains(x));
+                                    }
+                                }
+                                (x,s,u,w,j)
+                            }).collect();
+                            let subtypes = match &s.expr.types[btype] {
+                                EnumType(b)=>&b[ou],
+                                _=>panic!("doesn't fit type...")
+                            };
+                            let filt = allprogs.iter().cloned().filter(|x|!forbid.contains(x)).collect();
+                            if ou==firstelem {
+                                for (j,(sid,sty)) in thisside.into_iter().zip(subtypes).enumerate() {
+                                    newqueue.push((sid,backvars.clone(),Deconstruct(btypeconst[ou],j,Box::new(path.clone())),*sty));
+                                }
+                                inner(s,newqueue,newsplit,vec![],filt,commontype,expr.clone(),availableprogs)
+                            } else {
+                                let icd = thisside.into_iter().zip(subtypes).enumerate().map(|(j,(sid,sty))|
+                                    (sid,backvars.clone(),Deconstruct(btypeconst[ou],j,Box::new(path.clone())),*sty)
+                                ).collect();
+                                inner(s,
+                                    icd,
+                                    newsplit,newqueue,filt,
+                                    commontype,expr.clone(),availableprogs
+                                )
+                            }
                         }).collect();
-                        let mut queue_b : Vec<_> = stagnant.into_iter().map(|(mut x,s,w,j)|{
-                            x.retain(|(x,_)|!forbid_right.contains(x));
-                            (x,s,w,j)
-                        }).collect();
-                        let splitcandidates_a : Vec<_> = splitcandidates.iter().cloned().map(|(mut x,mut y,s,u,w,j)|{
-                            x.retain(|(x,_)|!forbid_left.contains(x));
-                            y.retain(|(x,_)|!forbid_left.contains(x));
-                            (x,y,s,u,w,j)
-                        }).collect();
-                        let amax = splitcandidates_a.iter().enumerate().max_by_key(|&(_,(x,y,_,_,_,_))|x.len()+y.len()).map(|(i,_)|i);
-                        let splitcandidates_b : Vec<_> = splitcandidates.into_iter().map(|(mut x,mut y,s,u,w,j)|{
-                            x.retain(|(x,_)|!forbid_right.contains(x));
-                            y.retain(|(x,_)|!forbid_right.contains(x));
-                            (x,y,s,u,w,j)
-                        }).collect();
-                        let bmax = splitcandidates_b.iter().enumerate().max_by_key(|&(_,(x,y,_,_,_,_))|x.len()+y.len()).map(|(i,_)|i);
-                        let (ltype,rtype) = match s.expr.types[btype] {
-                            LRType(a,b)=>(a,b),
-                            _=>panic!("doesn't fit type...")
-                        };
-                        let mut leftfilt = allprogs.clone();
-                        leftfilt.retain(|x|!forbid_left.contains(x));
-                        let mut rightfilt = allprogs;
-                        rightfilt.retain(|x|!forbid_right.contains(x));
-                        if firstelem {
-                            queue_b.push((rside,backvars.clone(),RUndo(Box::new(path.clone())),rtype));
-                            let lbranch = inner(s,vec![(lside,backvars,LUndo(Box::new(path.clone())),ltype)],splitcandidates_a,amax,queue_a,leftfilt,commontype,expr.clone(),availableprogs);
-                            let rbranch = inner(s,queue_b,splitcandidates_b,bmax,vec![],rightfilt,commontype,expr,availableprogs);
-                            s.expr.get_switch(path,lbranch,rbranch)
-                        } else {
-                            queue_a.push((lside,backvars.clone(),LUndo(Box::new(path.clone())),ltype));
-                            let lbranch = inner(s,queue_a,splitcandidates_a,amax,vec![],leftfilt,commontype,expr.clone(),availableprogs);
-                            let rbranch = inner(s,vec![(rside,backvars,RUndo(Box::new(path.clone())),rtype)],splitcandidates_b,bmax,queue_b,rightfilt,commontype,expr,availableprogs);
-                            s.expr.get_switch(path,lbranch,rbranch)
-                        }
+                        s.expr.get_switch(path,branches)
                     } else {
                         if allprogs.len()==0 {return BaseValue(0);}
                         let fp = allprogs[0];
@@ -901,7 +755,7 @@ impl FileInterpreter {
                             NotFinished(p)=>{
                                 for (awk,bckv,v,t) in stagnant {
                                     let (name,ty) = match bckv.get(&fp) {
-                                        None=>(match awk[0].1 {VarPat(n)=>n,_=>panic!()},t),
+                                        None=>(match awk[0].1 {VarPat(_,n)=>n,_=>panic!()},t),
                                         Some(x)=>*x
                                     };
                                     let mtr = Rc::make_mut(&mut expr);
@@ -921,24 +775,17 @@ impl FileInterpreter {
                         }
                     }
                 }
-                let (av,at) = self.process_program(expr.clone(),*a);
                 let mut commontype = None;
                 let val = inner(
                     self,
                     vec![(pats.iter().enumerate().collect(),HashMap::new(),av,at)],
-                    vec![],None,vec![],(0..progs.len()).collect(),&mut commontype,expr,&mut progs
+                    vec![],vec![],(0..progs.len()).collect(),&mut commontype,expr,&mut progs
                 );
                 (val,commontype.unwrap())
             }
         }
     }
 }
-enum FinishedOrNot<'a> {
-    Finished(Dsl),
-    NotFinished(Option<Program<'a>>)
-}
-use FinishedOrNot::{*};
-
 
 
 

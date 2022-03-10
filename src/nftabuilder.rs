@@ -12,22 +12,21 @@ use crate::dsl::{*};
 use crate::queue::{*};
 use crate::debug::{*};
 use Dsl::{*};
+use Transition::{*};
+use TermClassification::{*};
 
+#[derive(Debug)]
 pub enum ProcType {
-    PairType(usize,usize),
-    LRType(usize,usize),
+    EnumType(Vec<Vec<usize>>),
     ArrowType(usize,usize),
-    UnitType,
     Placeholder
 }
 use ProcType::{*};
 
+#[derive(Debug)]
 pub enum ProcValue {
-    PairValue(usize,usize),
-    LValue(usize),
-    RValue(usize),
+    Const(usize,Vec<usize>),
     FuncAsValue(usize),
-    UnitValue,
     Uneval
 }
 use ProcValue::{*};
@@ -35,72 +34,97 @@ use ProcValue::{*};
 #[derive(Debug)]
 pub struct FunctionEntry {
     dsl:Rc<Dsl>,
-    concval:usize,
+    pub concval:usize,
     pub argtypes:Vec<usize>,
     pub restype:usize
 }
 
-pub enum Constname {
-    LRSplit(Box<Constname>,Box<Constname>),
-    NullaryName(String),
-    UnaryName(String),
+#[derive(Clone,Copy,PartialEq,Eq,PartialOrd,Ord,Hash,Debug)]
+enum TypeMapType {
+    Constructor(usize),
+    Function(usize)
 }
-
-
+use TypeMapType::{*};
+pub struct ConstructorEntry {
+    pub argtypes:Vec<usize>,
+    pub restype:usize,
+    pub index:usize,
+    pub name:Option<String>
+}
 pub struct ExpressionBuilder {
     pub functions:Vec<FunctionEntry>,
     functionmemo:HashMap<(usize,Box<[usize]>),usize>,
-    stupid_typemap:HashMap<usize,Vec<(usize,usize)>>,
+    stupid_typemap:HashMap<usize,Vec<(TypeMapType,usize)>>,
     placeholderfunc:Option<usize>,
-    pair_hashes:HashMap<(usize,usize),usize>,
-    l_hashes:HashMap<usize,usize>,
-    r_hashes:HashMap<usize,usize>,
+    value_hashes:HashMap<(usize,Vec<usize>),usize>,
     pub values:Vec<(ProcValue,usize)>,
-    pair_type_hashes:HashMap<(usize,usize),usize>,
-    pub left_type_hashes:HashMap<usize,Vec<usize>>,
-    pub right_type_hashes:HashMap<usize,Vec<usize>>,
+    tuple_hashes:HashMap<Vec<usize>,(usize,usize)>,
     arrow_type_hashes:HashMap<(usize,usize),usize>,
-    lr_type_hashes:HashMap<(usize,usize),usize>,
-    pub l_type_hashes:HashMap<usize,Vec<usize>>,
-    pub r_type_hashes:HashMap<usize,Vec<usize>>,
     pub types:Vec<ProcType>,
-    pub falseval:Option<usize>,
-    pub trueval:Option<usize>,
 
-    temporary_recursive_memo:Option<(Rc<RefCell<HashMap<usize,usize>>>,Rc<Dsl>)>,
+
+    temporary_recursive_memo:Option<(Rc<RefCell<HashMap<usize,usize>>>,Rc<Dsl>,Vec<usize>)>,
 
     pub debug_type_names:HashMap<usize,String>,
-    pub debug_constr_names:HashMap<usize,Constname>,//type,value
+    pub constructors:Vec<ConstructorEntry>,
+
+    pub nat_type:Option<usize>,
+    pub bool_type:Option<usize>
+
+    // pub debug_constr_names:HashMap<usize,Constname>,//type,value
 }
 impl ExpressionBuilder {
     pub fn new()->ExpressionBuilder {
         ExpressionBuilder {
             functions:Vec::new(),
+            constructors:Vec::new(),
             functionmemo:HashMap::new(),
             stupid_typemap:HashMap::new(),
+
             placeholderfunc:None,
-            pair_hashes:HashMap::new(),
-            l_hashes:HashMap::new(),
-            r_hashes:HashMap::new(),
-            values:vec![(Uneval,0),(UnitValue,0)],
-            pair_type_hashes:HashMap::new(),
-            left_type_hashes:HashMap::new(),
-            right_type_hashes:HashMap::new(),
+            value_hashes:HashMap::new(),
+            values:vec![(Uneval,0)],
+
+            tuple_hashes:HashMap::new(),
+
             arrow_type_hashes:HashMap::new(),
-            lr_type_hashes:HashMap::new(),
-            l_type_hashes:HashMap::new(),
-            r_type_hashes:HashMap::new(),
-            types:vec![UnitType],
-            falseval:None,
-            trueval:None,
+            types:Vec::new(),
 
             temporary_recursive_memo:None,
 
             debug_type_names:HashMap::new(),
-            debug_constr_names:HashMap::new()
+            // debug_constr_names:HashMap::new()
+
+            nat_type:None,
+            bool_type:None
         }
     }
-
+    pub fn force_get_nat(&mut self) -> usize {//O, S
+        match self.nat_type {
+            Some(x)=>x,
+            None=>{
+                let f = self.get_placeholder_type();
+                self.place_type_in_placeholder(f,vec![vec![],vec![f]],vec![String::from("O"),String::from("S")]);
+                self.nat_type = Some(f);f
+            }
+        }
+    }
+    pub fn force_get_bool(&mut self) -> usize {//False, True
+        match self.bool_type {
+            Some(x)=>x,
+            None=>{
+                let f = self.get_placeholder_type();
+                self.place_type_in_placeholder(f,vec![vec![],vec![]],vec![String::from("False"),String::from("True")]);
+                self.bool_type = Some(f);f
+            }
+        }
+    }
+    pub fn get_constructors_for(&self,ty:usize)->Vec<usize> {
+        self.constructors.iter().enumerate().filter_map(|(i,c)|if c.restype==ty {Some(i)} else {None}).collect()
+    }
+    pub fn get_nullary_constructors(&self)->Vec<usize> {
+        self.constructors.iter().enumerate().filter_map(|(i,c)|if c.argtypes.len()==0 {Some(i)} else {None}).collect()
+    }
     pub fn get_f_handle(&self,handle:usize) -> usize {self.functions[handle].concval}
     pub fn get_f_count(&self) -> usize {self.functions.len()}
     pub fn get_function_placeholder(&mut self) -> usize {
@@ -117,7 +141,7 @@ impl ExpressionBuilder {
         }
         if args>tys.len() {panic!()}
         for (i,arg) in tys.iter().enumerate() {
-            self.stupid_typemap.entry(*arg).or_default().push((self.functions.len(),i));
+            self.stupid_typemap.entry(*arg).or_default().push((Function(self.functions.len()),i));
         }
         let result = match self.placeholderfunc {
             Some(x)=>{
@@ -148,57 +172,33 @@ impl ExpressionBuilder {
         }
     }
     pub fn exec_interior_recursive_function(&mut self,arg:usize) -> usize {
+        let whatev = &mut self.temporary_recursive_memo.as_mut().unwrap().2;
+        let tsize = self.values[arg].1;
+        if let Some(z) = whatev.last() {
+            if tsize >= *z {
+                return 0;
+            }
+        }
+        whatev.push(tsize);
         if let Some(z) = self.temporary_recursive_memo.as_ref().unwrap().0.borrow_mut().get(&arg) {
             return *z;
         }
         let trsh = self.temporary_recursive_memo.as_ref().unwrap().1.clone();
-        match self.substitute(&trsh,0,0,Rc::new(vec![(vec![BaseValue(arg)],0)])) {
+        let res = match self.substitute(&trsh,0,0,Rc::new(vec![(vec![BaseValue(arg)],0)])) {
             BaseValue(y)=>{
                 self.temporary_recursive_memo.as_ref().unwrap().0.borrow_mut().insert(arg,y);y
-            } _=>panic!()
-        }
+            }
+            k=>panic!("failed to resolve to concrete value! \nfunction: {:#?}\n{:?}\n{:?}\n",trsh,DebugValue{t:arg,expr:self},k)
+        };
+        self.temporary_recursive_memo.as_mut().unwrap().2.pop();
+        res
     }
     pub fn eval_recursive_function(&mut self,func:Rc<Dsl>,temp:Rc<RefCell<HashMap<usize,usize>>>,arg:usize) -> usize {
-        self.temporary_recursive_memo = Some((temp,func.clone()));
+        self.temporary_recursive_memo = Some((temp,func.clone(),Vec::new()));
         let res = self.exec_interior_recursive_function(arg);
         self.temporary_recursive_memo = None; res
     }
 
-    pub fn get_placeholder_type(&mut self) -> usize {self.types.push(Placeholder);self.types.len()-1}
-    pub fn get_unit_type(&self) -> usize {0}
-    pub fn get_unit_value(&self) -> usize {1}
-    pub fn get_pair_type(&mut self,a:usize,b:usize)->usize {
-        match self.pair_type_hashes.entry((a,b)) {
-            Occupied(x)=>x.get().clone(),
-            Vacant(x)=>{
-                let nval=self.types.len();
-                self.types.push(PairType(a,b));
-                x.insert(nval);
-                self.left_type_hashes.entry(a).or_default().push(nval);
-                self.right_type_hashes.entry(b).or_default().push(nval);
-                nval
-            }
-        }
-    }
-    pub fn place_lr_type_in_placeholder(&mut self,a:usize,b:usize,c:usize) {
-        self.types[c]=LRType(a,b);
-        self.lr_type_hashes.insert((a,b),c);
-        self.l_type_hashes.entry(a).or_default().push(c);
-        self.r_type_hashes.entry(b).or_default().push(c);
-    }
-    pub fn get_lr_type(&mut self,a:usize,b:usize)->usize {
-        match self.lr_type_hashes.entry((a,b)) {
-            Occupied(x)=>x.get().clone(),
-            Vacant(x)=>{
-                let nval=self.types.len();
-                self.types.push(LRType(a,b));
-                x.insert(nval);
-                self.l_type_hashes.entry(a).or_default().push(nval);
-                self.r_type_hashes.entry(b).or_default().push(nval);
-                nval
-            }
-        }
-    }
     pub fn get_arrow_type(&mut self,a:usize,b:usize)->usize {
         match self.arrow_type_hashes.entry((a,b)) {
             Occupied(x)=>x.get().clone(),
@@ -210,37 +210,51 @@ impl ExpressionBuilder {
             }
         }
     }
-    pub fn get_pair(&mut self,a:usize,b:usize)->usize {
-        if a==0 || b==0 {return 0}
-        match self.pair_hashes.entry((a,b)) {
+    pub fn get_placeholder_type(&mut self) -> usize {self.types.push(Placeholder);self.types.len()-1}
+    pub fn get_tuple_type(&mut self,a:Vec<usize>)->(usize,usize) {//first is type, second is constructor index
+        match self.tuple_hashes.entry(a) {
             Occupied(x)=>x.get().clone(),
             Vacant(x)=>{
-                let nval=self.values.len();
-                self.values.push((PairValue(a,b),self.values[a].1+self.values[b].1+1));
-                x.insert(nval);
-                nval
+                for (i,arg) in x.key().iter().enumerate() {
+                    self.stupid_typemap.entry(*arg).or_default().push((Constructor(self.constructors.len()),i));
+                }
+                let keyclone = x.key().clone();
+                x.insert((self.types.len(),self.constructors.len()));
+                self.constructors.push(ConstructorEntry {
+                    argtypes:keyclone.clone(),
+                    restype:self.types.len(),
+                    index:0,
+                    name:None
+                });
+                self.types.push(EnumType(vec![keyclone]));
+                (self.types.len()-1,self.constructors.len()-1)
             }
         }
     }
-    pub fn get_l(&mut self,a:usize)->usize {
-        if a==0 {return 0}
-        match self.l_hashes.entry(a) {
-            Occupied(x)=>x.get().clone(),
-            Vacant(x)=>{
-                let nval=self.values.len();
-                self.values.push((LValue(a),self.values[a].1+1));
-                x.insert(nval);
-                nval
+    pub fn place_type_in_placeholder(&mut self,a:usize,b:Vec<Vec<usize>>,names:Vec<String>)->Vec<usize> {
+        let mut res = Vec::new();
+        for (j,c) in b.iter().enumerate() {
+            for (i,arg) in c.iter().enumerate() {
+                self.stupid_typemap.entry(*arg).or_default().push((Constructor(self.constructors.len()),i));
             }
+            res.push(self.constructors.len());
+            self.constructors.push(ConstructorEntry {
+                argtypes:c.clone(),
+                restype:a,
+                index:j,
+                name:Some(names[j].clone())
+            });
         }
+        self.types[a] = EnumType(b);
+        res
     }
-    pub fn get_r(&mut self,a:usize)->usize {
-        if a==0 {return 0}
-        match self.r_hashes.entry(a) {
+    pub fn get_constructed(&mut self,a:usize,b:Vec<usize>)->usize {
+        if b.contains(&0) {return 0;}
+        match self.value_hashes.entry((a,b)) {
             Occupied(x)=>x.get().clone(),
             Vacant(x)=>{
                 let nval=self.values.len();
-                self.values.push((RValue(a),self.values[a].1+1));
+                self.values.push((Const(a,x.key().1.clone()),x.key().1.iter().map(|z|self.values[*z].1).sum::<usize>()+1));
                 x.insert(nval);
                 nval
             }
@@ -276,16 +290,16 @@ fn compare_strictlysmaller(
         if x.contains(&a) {return Smaller;}
     }
     match (&builder.values[a].0,&builder.values[b].0) {
-        (PairValue(ax,ay),PairValue(bx,by))=>match compare_strictlysmaller(builder,subexpressions,*ax,*bx) {
-            st@(Same|Smaller)=>match (st,compare_strictlysmaller(builder,subexpressions,*ay,*by)) {
-                (Same,Same)=>Same,
-                (Smaller|Same,Smaller|Same)=>{
-                    subexpressions.entry(b).or_default().insert(a);
-                    Smaller
+        (Const(ax,ay),Const(bx,by)) if ax==bx => {//match compare_strictlysmaller(builder,subexpressions,*ax,*bx)
+            let mut smaller = false;
+            for (ay,by) in ay.iter().zip(by.iter()) {
+                match compare_strictlysmaller(builder,subexpressions,*ay,*by) {
+                    Unrelated=>{return Unrelated}
+                    Smaller=>{smaller=true;}
+                    Same=>{}
                 }
-                _=>Unrelated
             }
-            _=>Unrelated
+            if smaller {Smaller} else {Same}
         }//uncomment the following line to allow any expression where a subexpression was replaced by a strict subexpression.
         // (LValue(a),LValue(b))|(RValue(a),RValue(b))=>compare_strictlysmaller(builder,subexpressions,*a,*b),
         _=>Unrelated
@@ -293,7 +307,7 @@ fn compare_strictlysmaller(
 }
 
 impl NTFABuilder {
-    pub fn new(builder:&mut ExpressionBuilder,input_type:usize,output_type:usize)->Self {
+    pub fn new(input_type:usize,output_type:usize)->Self {
         //state space:
         // 0:uneval
         // 1:()
@@ -312,23 +326,8 @@ impl NTFABuilder {
         // 11-onwards: free space!
         NTFABuilder {
             input_type,output_type,
-            paths:vec![
-                (0..builder.get_f_count()).rev().map(|ff|(11+ff,vec![0;builder.get_required_function_args(ff).unwrap()]))
-                .chain(vec![
-                    (10,vec![0]),
-                    (9,vec![0,0,0]),
-                    (8,vec![0]),
-                    (7,vec![0]),
-                    (6,vec![0]),
-                    (5,vec![0]),
-                    (4,vec![0]),
-                    (3,vec![0]),
-                    (2,vec![0,0]),
-                    (1,vec![]),
-                    (0,vec![]),
-                ]).collect()
-            ],//inner vec must be sorted
-            revhash:HashMap::new(),
+            paths:vec![(Vec::new(),Some(1),Vec::new())],//inner vec must be sorted
+            // revhash:HashMap::new(),
             intersect_memo:HashMap::new(),
             // rename_memo:HashMap::new(),
             // subset_memo:HashMap::new(),
@@ -336,40 +335,276 @@ impl NTFABuilder {
             purgeset:HashSet::new()
         }
     }
+
+
+
+
+
+
+    // pub fn build_symmetric_ntfa(
+    //     &mut self,
+    //     builder:&mut ExpressionBuilder,
+    //     input:usize,
+    //     outputs:&HashMap<usize,BaseLiteral>,
+    //     confirmer:&Confirmer,
+    //     previous_accepting_states:&mut HashMap<usize,HashSet<usize>>,
+    //     // graph_buffer : &mut HashMap<usize,PartialNTFA>,
+    //     subexpressions : &mut HashMap<usize,HashSet<usize>>,
+    //     k:usize,interp:usize
+    // )->Option<usize> {
+    //     let mut processed : Vec<(usize,usize,usize)> = Vec::new();
+    //     let mut processed_rel : HashMap<usize,Vec<(usize,usize)>> = HashMap::new();
+    //     let mut visited : HashMap<usize,(usize,bool)> = HashMap::new();
+    //     let mut accepting_states : HashSet<usize> = HashSet::new();
+    //     let mut smaller_unbound_inputs : Vec<usize> = Vec::new();
+    //     let mut queue = BinaryHeap::new();
+    //     let mut res = PartialNTFA::new();
+    //     res.add_rule(Input,Vec::new(),input);
+    //     queue.push(QueueElem{item:(input,self.input_type,true),priority:1});
+    //     for nul in builder.get_nullary_constructors() {
+    //         let resultant = builder.get_constructed(nul,Vec::new());
+    //         let rtype = builder.constructors[nul].restype;
+    //         res.add_rule(Transition::Construct(nul),Vec::new(),resultant);
+    //         queue.push(QueueElem{item:(resultant,rtype,true),priority:1});
+    //     }
+    //     let output = outputs.get(&input).cloned();
+    //     while let Some(QueueElem{item:(x,xt,fresh),priority:size}) = queue.pop() {
+    //         if size>=k {break;}
+    //         if match visited.entry(x) {
+    //             Occupied(mut y)=>{
+    //                 let yg = *y.get();
+    //                 if fresh && !yg.1 {
+    //                     y.insert((yg.0,true));false
+    //                 } else {true}
+    //             },
+    //             Vacant(y)=>{y.insert((size,fresh));false}
+    //         } {continue;}
+    //         if xt == self.input_type && compare_strictlysmaller(builder,subexpressions,x,input).ok() {
+    //             println!("back to the drawing board. From {:?} to {:?}",DebugValue{t:input,expr:builder},DebugValue{t:x,expr:builder});
+    //             match previous_accepting_states.get(&x) {
+    //                 Some(b)=>{
+    //                     for bub in b {
+    //                         println!("possible link found. f({:?}) = {:?}",DebugValue{t:x,expr:builder},DebugValue{t:*bub,expr:builder});
+    //                         res.add_rule(Recursion,vec![x],*bub);
+    //                         queue.push(QueueElem{item:(*bub,self.output_type,true),priority:size+1});
+    //                     }
+    //                 }
+    //                 None => {
+    //                     smaller_unbound_inputs.push(x);
+    //                     if let Some(z) = processed_rel.get(&self.output_type) {
+    //                         for (z,_) in z {
+    //                             res.add_rule(Recursion,vec![x],*z);
+    //                         }
+    //                     }
+    //                     // queue.push(QueueElem{item:(x,xt,fresh),priority:size});
+    //                     // stack.push(new_stack_elem(
+    //                     //     x,
+    //                     //     self.input_type,
+    //                     //     outputs,
+    //                     //     builder
+    //                     // ));
+    //                     // continue 'stackloop;
+    //                 }
+    //             }
+    //         }
+    //         res.add_rule(Constant(x),Vec::new(),x);
+    //         if fresh {
+    //             match (&builder.values[x].0,&builder.types[xt]) {
+    //                 (Const(j,y),EnumType(v))=>{
+    //                     for (i,(y,yt)) in y.iter().zip(v[builder.constructors[*j].index].iter()).enumerate() {
+    //                         res.add_rule(Destruct(*j,i),vec![x],*y);
+    //                         queue.push(QueueElem{item:(*y,*yt,true),priority:size+1});
+    //                     }
+    //                 }
+    //                 _=>{}
+    //             }
+    //         }
+    //         processed.push((x,xt,size));
+    //         for (y,yt,ysize) in processed.iter() {
+    //             if *ysize+size>=k {continue;}
+    //             if fresh {
+    //                 match (&builder.values[x].0,&builder.types[xt]) {
+    //                     (Const(j,_),EnumType(v)) if v.len()>1 =>{
+    //                         let index = builder.constructors[*j].index;
+    //                         let mut nvm = vec![x];
+    //                         nvm.resize(1+v.len(),0);
+    //                         nvm[index+1]=*y;
+    //                         res.add_rule(Switch(v.len()),nvm,*y);
+    //                     }
+    //                     _=>{}
+    //                 }
+    //             }
+    //             if visited[y].1 {
+    //                 match (&builder.values[*y].0,&builder.types[*yt]) {
+    //                     (Const(j,_),EnumType(v)) if v.len()>1 =>{
+    //                         let index = builder.constructors[*j].index;
+    //                         let mut nvm = vec![*y];
+    //                         nvm.resize(1+v.len(),0);
+    //                         nvm[index+1]=x;
+    //                         res.add_rule(Switch(v.len()),nvm,x);
+    //                     }
+    //                     _=>{}
+    //                 }
+    //             }
+    //         }
+    //         if xt==self.output_type {
+    //             for z in smaller_unbound_inputs.iter() {
+    //                 res.add_rule(Recursion,vec![*z],x);
+    //             }
+    //             let oua = if let Some(y) = &output {y.accepts(x)} else {true};
+    //             if oua && confirmer.accepts(builder,input,x) {
+    //                 // println!("processing ACTUAL RESULT! {:?}",DebugValue{t:x,expr:builder});
+    //                 accepting_states.insert(x);
+    //             }
+    //             // else {
+    //             //     println!("processing POSSIBLE RESULT! {:?}",DebugValue{t:x,expr:builder});
+    //             // }
+    //         }
+    //         // else {
+    //         //     // println!("processing! {:?}",DebugValue{t:x,expr:builder});
+    //         // }
+    //         processed_rel.entry(xt).or_default().push((x,size));
+    //         if let Some(z) = builder.stupid_typemap.get(&xt) {
+    //             let z=z.clone();
+    //             for (f_ind,s_ind) in z.iter() {
+    //                 let (argtypes,restype) = match f_ind {
+    //                     Function(x)=>{
+    //                         let FunctionEntry {argtypes,restype,..} = &builder.functions[*x];
+    //                         (argtypes,restype)
+    //                     }
+    //                     Constructor(x)=>{
+    //                         let ConstructorEntry {argtypes,restype,..} = &builder.constructors[*x];
+    //                         (argtypes,restype)
+    //                     }
+    //                 };
+    //                 let restype=*restype;
+    //                 let mut cartesian = vec![(Vec::new(),0)];
+    //                 for (i,argtype) in argtypes.into_iter().enumerate() {
+    //                     if i==*s_ind {
+    //                         for (c,ss) in cartesian.iter_mut() {c.push(x);*ss+=size}
+    //                         // println!("operated on cartesian {:?}",cartesian);
+    //                         continue;
+    //                     }
+    //                     let mut swap_buf = Vec::new();
+    //                     if let Some(v) = processed_rel.get(&argtype) {
+    //                         for (u,usi) in v.iter() {
+    //                             for (cart,csize) in cartesian.iter() {
+    //                                 swap_buf.push({let mut cc=cart.clone();cc.push(*u);(cc,csize+usi)});
+    //                             }
+    //                         }
+    //                     }
+    //                     cartesian=swap_buf;
+    //                     if cartesian.len()==0 {break;}
+    //                     // println!("increasing {:?} to {:?}",cartesian,swap_buf);
+    //                 }
+    //                 // println!("calling function: {:?} {:?}",argtypes,cartesian);
+    //                 for (cart,csize) in cartesian.into_iter() {
+    //                     if csize>=k {continue;}
+    //                     let exec = match f_ind {
+    //                         Constructor(x)=>{
+    //                             let exec = builder.get_constructed(*x,cart.clone());
+    //                             res.add_rule(Transition::Construct(*x),cart,exec);exec
+    //                         }
+    //                         Function(x)=>{
+    //                             let exec = builder.exec_function(*x,cart.clone());
+    //                             res.add_rule(ArbitraryFunc(*x),cart,exec);exec
+    //                         }
+    //                     };
+    //                     queue.push(QueueElem{item:(exec,restype,true),priority:csize+1});
+    //                 }
+    //             }
+    //         }
+    //     }
+    //     // println!("{:?} resulted in: {:#?}",DebugValue{t:input,expr:builder},res);
+    //     // println!("constructed one.");
+    //     // println!("determinizing...");
+    //     // res.determinize();
+    //     // println!("converting...");
+    //     // if accepting_states.len()==0 {return None}
+    //     // if accepting_states.len()>1 {
+    //     //     panic!("needs some more development...")
+    //     // }
+    //     // graph_buffer.insert(input,res);
+    //     // println!("converted!");
+        
+    //     previous_accepting_states.insert(input,accepting_states);
+        
+    //     println!("converting...");
+    //     let accepting_states : Vec<_> = previous_accepting_states[&input].iter().copied().collect();
+    //     let states = res.convert(self,&accepting_states,interp);
+    //     self.simplify(states)
+    // }
+
+
+
+
+
+
+
+
+
+
+
     pub fn build_ntfa(
         &mut self,
         builder:&mut ExpressionBuilder,
         input:usize,
         outputs:&HashMap<usize,BaseLiteral>,
         confirmer:&Confirmer,
-        previous_accepting_states:&mut HashMap<usize,HashSet<usize>>,
+        previous_accepting_states:&mut HashMap<usize,HashSet<(usize,TermClassification)>>,
         graph_buffer : &mut HashMap<usize,PartialNTFA>,
         subexpressions : &mut HashMap<usize,HashSet<usize>>,
-        k:usize
-    )->(Option<usize>,ValueMapper) {
-    //     println!("-=-=-=-=-=-=-=-=-=- BEGINNING BUILD PHASE: {:?}",DebugTypedValue{val:input,ty:input_type,expr:builder});
+        term_size_limiter : &mut HashMap<usize,usize>,
+        k:usize,interp:usize
+    )->Option<usize> {
+    //     println!("-=-=-=-=-=-=-=-=-=- BEGINNING BUILD PHASE: {:?}",DebugValue{val:input,ty:input_type,expr:builder});
+        let buildstrategy = RepetitionCount;
+        let recursionstrategy = ApproximateAcceptingStates;
+        let limiterstrategy = SizeLimited;
+        enum LimitingStrategy {
+            SizeLimited,
+            NoLimit
+        }
+        use LimitingStrategy::{*};
+        enum BuildStrategy {
+            SizeCalculationStopAtRule,
+            SizeCalculationStopAtNode,
+            RepetitionCount,
+        }
+        use BuildStrategy::{*};
+        enum RecursionStrategy {
+            ApproximateAcceptingStates,
+            BuildSmallerGraphs
+        }
+        use RecursionStrategy::{*};
         #[derive(Default)]
         struct StackElem {
             input : usize,
             output : Option<BaseLiteral>,
             res : PartialNTFA,
-            processed : HashMap<usize,usize>,
-            processed_rel : HashMap<usize,Vec<(usize,usize)>>,//type:val,size,rstatus
-            queue : BinaryHeap<QueueElem<(usize,Vec<usize>,bool)>>,
-            visited : HashMap<(usize,usize),(usize,bool)>,
-            accepting_states : HashSet<usize>
+            processed : Vec<(usize,usize,TermClassification,usize)>,
+            processed_rel : HashMap<usize,Vec<(usize,TermClassification,usize)>>,//type:val,size
+            queue : BinaryHeap<QueueElem<(usize,usize,TermClassification)>>,
+            visited : HashMap<(usize,TermClassification),usize>,
+            accepting_states : HashSet<(usize,TermClassification)>,
+            smaller_unbound_inputs : Vec<(usize,TermClassification)>
         }
         fn new_stack_elem(
             input:usize,
             input_type:usize,
-            outputs:&HashMap<usize,BaseLiteral>
+            outputs:&HashMap<usize,BaseLiteral>,
+            builder:&mut ExpressionBuilder
         )->StackElem {
             let mut queue = BinaryHeap::new();
             let mut res = PartialNTFA::new();
-            res.add_rule(0,Vec::new(),1);
-            res.add_rule(1,Vec::new(),input);
-            queue.push(QueueElem{item:(1,vec![0],true),priority:1});
-            queue.push(QueueElem{item:(input,vec![input_type],true),priority:1});
+            res.add_rule(Input,Vec::new(),(input,Elimination));
+            queue.push(QueueElem{item:(input,input_type,Elimination),priority:1});
+            for nul in builder.get_nullary_constructors() {
+                let resultant = builder.get_constructed(nul,Vec::new());
+                let rtype = builder.constructors[nul].restype;
+                res.add_rule(Transition::Construct(nul),Vec::new(),(resultant,Introduction));
+                queue.push(QueueElem{item:(resultant,rtype,Introduction),priority:1});
+            }
             StackElem{
                 input,
                 output:outputs.get(&input).cloned(),
@@ -381,7 +616,8 @@ impl NTFABuilder {
         let mut stack : Vec<StackElem> = vec![new_stack_elem(
             input,
             self.input_type,
-            outputs
+            outputs,
+            builder
         )];
         'stackloop: while let Some(StackElem{
             input,
@@ -391,228 +627,209 @@ impl NTFABuilder {
             processed_rel,
             queue,
             visited,
-            accepting_states
+            accepting_states,
+            smaller_unbound_inputs
         }) = stack.last_mut() {
             let input=*input;
-            // let output=
-            while let Some(QueueElem{item:(x,mut xtl,fresh),priority:size}) = queue.pop() {
-                if size>=k {break;}
-                xtl.retain(|xt|{
-                    match visited.entry((x,*xt)) {
-                        Occupied(mut y)=>{
-                            let yg = *y.get();
-                            if fresh && !yg.1 {
-                                y.insert((yg.0,true));true
-                            } else {false}
-                        },
-                        Vacant(y)=>{y.insert((size,fresh));true}
-                    }
-                });
-                if xtl.len()==0 {continue;}
-                let xtl=xtl;
-                for xt in xtl.iter() {
-                    if *xt == self.input_type && compare_strictlysmaller(builder,subexpressions,x,input).ok() {
-                        println!("back to the drawing board. From {:?} to {:?}",DebugTypedValue{val:input,ty:self.input_type,expr:builder},DebugTypedValue{val:x,ty:self.input_type,expr:builder});
-                        if !previous_accepting_states.contains_key(&x) {
-                            queue.push(QueueElem{item:(x,xtl,fresh),priority:size});
-                            stack.push(new_stack_elem(
-                                x,
-                                self.input_type,
-                                outputs
-                            ));
-                            continue 'stackloop;
+            while let Some(QueueElem{item:(x,xt,fresh),priority:size}) = queue.pop() {
+                if size>k {break;}
+                match visited.entry((x,fresh)) {
+                    Occupied(p)=>{
+                        if *p.get()>size {panic!()}
+                        continue;
+                    },
+                    Vacant(y)=>{y.insert(size);}
+                }
+                // println!("processing: {} {} {:?}",size,k,DebugValue{t:x,expr:builder});
+                if xt == self.input_type && compare_strictlysmaller(builder,subexpressions,x,input).ok() {
+                    match previous_accepting_states.get(&x) {
+                        Some(b)=>{
+                            for (bub,_) in b {
+                                res.add_rule(Recursion,vec![(x,fresh)],(*bub,Elimination));
+                                queue.push(QueueElem{item:(*bub,self.output_type,Elimination),priority:size+1});
+                            }
+                        }
+                        None => {
+                            if let ApproximateAcceptingStates = recursionstrategy {
+                                smaller_unbound_inputs.push((x,fresh));
+                                if let Some(z) = processed_rel.get(&self.output_type) {
+                                    for (z,zfresh,_) in z {
+                                        res.add_rule(Recursion,vec![(x,fresh)],(*z,*zfresh));
+                                    }
+                                }
+                            }
+                            if let BuildSmallerGraphs = recursionstrategy {
+                                println!("pushing to stack...");
+                                visited.remove(&(x,fresh));
+                                queue.push(QueueElem{item:(x,xt,fresh),priority:size});
+                                stack.push(new_stack_elem(
+                                    x,
+                                    self.input_type,
+                                    outputs,
+                                    builder
+                                ));
+                                continue 'stackloop;
+                            }
                         }
                     }
                 }
-                let mut res_l = Vec::new();
-                let mut res_r = Vec::new();
-                let mut res_ul = Vec::new();
-                let mut res_ur = Vec::new();
-                let mut res_fst = Vec::new();
-                let mut res_snd = Vec::new();
-                for xt in xtl.iter() {
-                    if let Some(l_up) = builder.l_type_hashes.get(&xt) {
-                        res_l.extend(l_up.iter().copied());
-                    }
-                    if let Some(r_up) = builder.r_type_hashes.get(&xt) {
-                        res_r.extend(r_up.iter().copied());
-                    }
-                    match &builder.types[*xt] {
-                        PairType(a,b) => {
-                            res_fst.push(*a);
-                            res_snd.push(*b);
-                        }
-                        LRType(a,b) => {
-                            res_ul.push(*a);
-                            res_ur.push(*b);
-                        }
-                        _ => {}
-                    }
-                }
-                if fresh {
-                    match &builder.values[x].0 {
-                        PairValue(y,z)=>{
-                            if *y!=1 {
-                                res.add_rule(3,vec![x],*y);
-                                queue.push(QueueElem{item:(*y,res_fst,true),priority:size+1});
-                            }
-                            if *z!=1 {
-                                res.add_rule(4,vec![x],*z);
-                                queue.push(QueueElem{item:(*z,res_snd,true),priority:size+1});
-                            }
-                        }
-                        LValue(y)=>{
-                            if *y!=1 {
-                                res.add_rule(7,vec![x],*y);
-                                queue.push(QueueElem{item:(*y,res_ul,true),priority:size+1});
-                            }
-                        }
-                        RValue(y)=>{
-                            if *y!=1 {
-                                res.add_rule(8,vec![x],*y);
-                                queue.push(QueueElem{item:(*y,res_ur,true),priority:size+1});
+                // res.add_rule(Constant(x),Vec::new(),x);
+                if let Elimination = fresh {
+                    match (&builder.values[x].0,&builder.types[xt]) {
+                        (Const(j,y),EnumType(v))=>{
+                            for (i,(y,yt)) in y.iter().zip(v[builder.constructors[*j].index].iter()).enumerate() {
+                                if let SizeLimited = &limiterstrategy {
+                                    if term_size_limiter.get(y).copied().unwrap_or(2)+builder.values[input].1 <= builder.values[*y].1 {
+                                        continue;
+                                    }
+                                }
+                                if let SizeCalculationStopAtRule = &buildstrategy {
+                                    if size>=k {continue;}
+                                }
+                                res.add_rule(Destruct(*j,i),vec![(x,fresh)],(*y,Elimination));
+                                if let SizeCalculationStopAtNode = &buildstrategy {
+                                    if size>=k {continue;}
+                                }
+                                queue.push(QueueElem{item:(*y,*yt,Elimination),priority:size+1});
                             }
                         }
                         _=>{}
                     }
                 }
-                if res_l.len()>0 {
-                    let nh = builder.get_l(x);
-                    res.add_rule(5,vec![x],nh);
-                    queue.push(QueueElem{item:(nh,res_l,false),priority:size+1});
-                }
-                if res_r.len()>0 {
-                    let nh = builder.get_r(x);
-                    res.add_rule(6,vec![x],nh);
-                    queue.push(QueueElem{item:(nh,res_r,false),priority:size+1});
-                }
-                // println!("checkpoint...");
-                for xt in xtl.iter() {
-                    // println!("xtl...");
-                    let oua = if let Some(y) = &output {y.accepts(x)} else {true};
-                    if *xt == self.output_type && oua && confirmer.accepts(builder,input,x) {
-                        accepting_states.insert(x);
-                    }
-                    if *xt == self.input_type && compare_strictlysmaller(builder,subexpressions,x,input).ok() {
-                        for bub in &previous_accepting_states[&x] {
-                            res.add_rule(10,vec![x],*bub);
-                            queue.push(QueueElem{item:(*bub,vec![self.output_type],true),priority:size+1});
+                processed.push((x,xt,fresh,size));
+                if let Elimination = fresh {
+                    for (y,yt,yfresh,ysize) in processed.iter() {
+                        if let SizeCalculationStopAtRule = &buildstrategy {
+                            if *ysize+2*size>=k {continue;}
+                        }
+                        match (&builder.values[x].0,&builder.types[xt]) {
+                            (Const(j,_),EnumType(v)) if v.len()>1 =>{
+                                let index = builder.constructors[*j].index;
+                                let mut nvm = vec![(x,fresh)];
+                                nvm.resize(1+v.len(),(0,Introduction));
+                                nvm[index+1]=(*y,*yfresh);
+                                res.add_rule(Switch(v.len()),nvm,(*y,Introduction));
+                                if let SizeCalculationStopAtNode = &buildstrategy {
+                                    if *ysize+2*size>=k {continue;}
+                                }
+                                queue.push(QueueElem{item:(*y,*yt,Introduction),
+                                    priority:if let RepetitionCount = &buildstrategy {size+1} else {*ysize+2*size+1}
+                                });
+                            }
+                            _=>{}
                         }
                     }
-                    if let Some(z) = builder.stupid_typemap.get(&xt) {
-                        let z=z.clone();
-                        for (f_ind,s_ind) in z.iter() {
-                            let FunctionEntry {argtypes,restype,..} = &builder.functions[*f_ind];
-                            let restype=*restype;
-                            let mut cartesian = vec![(Vec::new(),0)];
-                            for (i,argtype) in argtypes.into_iter().enumerate() {
-                                if i==*s_ind {
-                                    for (c,ss) in cartesian.iter_mut() {c.push(x);*ss+=size}
-                                    // println!("operated on cartesian {:?}",cartesian);
-                                    continue;
+                }
+                for (y,yt,yfresh,ysize) in processed.iter() {
+                    if let Elimination = yfresh {
+                        if let SizeCalculationStopAtRule = &buildstrategy {
+                            if 2*ysize+size>=k {continue;}
+                        }
+                        match (&builder.values[*y].0,&builder.types[*yt]) {
+                            (Const(j,_),EnumType(v)) if v.len()>1 =>{
+                                let index = builder.constructors[*j].index;
+                                let mut nvm = vec![(*y,*yfresh)];
+                                nvm.resize(1+v.len(),(0,Introduction));
+                                nvm[index+1]=(x,fresh);
+                                res.add_rule(Switch(v.len()),nvm,(x,Introduction));
+                                if let SizeCalculationStopAtNode = &buildstrategy {
+                                    if 2*ysize+size>=k {continue;}
                                 }
-                                let mut swap_buf = Vec::new();
-                                if let Some(v) = processed_rel.get(&argtype) {
-                                    for (u,usi) in v.iter() {
-                                        for (cart,csize) in cartesian.iter() {
-                                            swap_buf.push({let mut cc=cart.clone();cc.push(*u);(cc,csize+usi)});
-                                        }
+                                queue.push(QueueElem{item:(x,xt,Introduction),
+                                    priority:if let RepetitionCount = &buildstrategy {size+1} else {2*ysize+size+1}
+                                });
+                            }
+                            _=>{}
+                        }
+                    }
+                }
+                if xt==self.output_type {
+                    for z in smaller_unbound_inputs.iter() {
+                        res.add_rule(Recursion,vec![*z],(x,fresh));
+                    }
+                    let oua = if let Some(y) = &output {y.accepts(x)} else {true};
+                    if oua && confirmer.accepts(builder,input,x) {
+                        accepting_states.insert((x,fresh));
+                    }
+                }
+                processed_rel.entry(xt).or_default().push((x,fresh,size));
+                if let Some(z) = builder.stupid_typemap.get(&xt) {
+                    let z=z.clone();
+                    for (f_ind,s_ind) in z.iter() {
+                        let (argtypes,restype) = match f_ind {
+                            Function(x)=>{
+                                let FunctionEntry {argtypes,restype,..} = &builder.functions[*x];
+                                (argtypes,restype)
+                            }
+                            Constructor(x)=>{
+                                let ConstructorEntry {argtypes,restype,..} = &builder.constructors[*x];
+                                (argtypes,restype)
+                            }
+                        };
+                        let restype=*restype;
+                        let mut cartesian = vec![(Vec::new(),0)];
+                        for (i,argtype) in argtypes.into_iter().enumerate() {
+                            if i==*s_ind {
+                                for (c,ss) in cartesian.iter_mut() {c.push((x,fresh));*ss+=size}
+                                // println!("operated on cartesian {:?}",cartesian);
+                                continue;
+                            }
+                            let mut swap_buf = Vec::new();
+                            if let Some(v) = processed_rel.get(&argtype) {
+                                for (u,ufresh,usi) in v.iter() {
+                                    for (cart,csize) in cartesian.iter() {
+                                        swap_buf.push({let mut cc=cart.clone();cc.push((*u,*ufresh));(cc,csize+usi)});
                                     }
                                 }
-                                cartesian=swap_buf;
-                                if cartesian.len()==0 {break;}
-                                // println!("increasing {:?} to {:?}",cartesian,swap_buf);
                             }
-                            // println!("calling function: {:?} {:?}",argtypes,cartesian);
-                            for (cart,csize) in cartesian.into_iter() {
-                                // if csize>=k {continue;}
-                                let exec = builder.exec_function(*f_ind,cart.clone());
-                                res.add_rule(11+*f_ind,cart,exec);
-                                queue.push(QueueElem{item:(exec,vec![restype],true),priority:csize+1});
+                            cartesian=swap_buf;
+                            if cartesian.len()==0 {break;}
+                        }
+                        for (cart,csize) in cartesian.into_iter() {
+                            if let SizeCalculationStopAtRule = &buildstrategy {
+                                if csize>=k {continue;}
                             }
-                        }
-                    }
-                    if size*2<k {
-                        if let Some(w) = builder.pair_type_hashes.get(&(*xt,*xt)) {
-                            let w=*w;
-                            let merged = builder.get_pair(x,x);
-                            res.add_rule(2,vec![x,x],merged);
-                            queue.push(QueueElem{item:(merged,vec![w],false),priority:size*2+1});
-                        }
-                    }
-                    if let Some(z) = builder.left_type_hashes.get(&xt) {
-                        let z=z.clone();
-                        for w in z.iter() {
-                            let r = match &builder.types[*w] {PairType(_,r)=>r,_=>panic!()};
-                            if let Some(v) = processed_rel.get(&r) {
-                                for (u,usi) in v.iter() {
-                                    // if *usi+size>=k {continue;}
-                                    let merged = builder.get_pair(x,*u);
-                                    res.add_rule(2,vec![x,*u],merged);
-                                    queue.push(QueueElem{item:(merged,vec![*w],false),priority:*usi+size+1});
+                            let exec = match f_ind {
+                                Constructor(x)=>builder.get_constructed(*x,cart.iter().map(|(k,_)|*k).collect()),
+                                Function(x)=>builder.exec_function(*x,cart.iter().map(|(k,_)|*k).collect())
+                            };
+                            if let SizeLimited = &limiterstrategy {
+                                if term_size_limiter.get(&exec).copied().unwrap_or(2)+builder.values[input].1 <= builder.values[exec].1 {
+                                    continue;
                                 }
                             }
-                        }
-                    }
-                    if let Some(z) = builder.right_type_hashes.get(&xt) {
-                        let z=z.clone();
-                        for w in z.iter() {
-                            let l = match &builder.types[*w] {PairType(l,_)=>l,_=>panic!()};
-                            if let Some(v) = processed_rel.get(&l) {
-                                for (u,usi) in v.iter() {
-                                    // if *usi+size>=k {continue;}
-                                    let merged = builder.get_pair(*u,x);
-                                    res.add_rule(2,vec![*u,x],merged);
-                                    queue.push(QueueElem{item:(merged,vec![*w],false),priority:*usi+size+1});
+                            match f_ind {
+                                Constructor(x)=>{
+                                    res.add_rule(Transition::Construct(*x),cart,(exec,Introduction));
+                                }
+                                Function(x)=>{
+                                    res.add_rule(ArbitraryFunc(*x),cart,(exec,Introduction));
                                 }
                             }
+                            if let SizeCalculationStopAtNode = &buildstrategy {
+                                if csize>=k {continue;}
+                            }
+                            queue.push(QueueElem{item:(exec,restype,Introduction),
+                                priority:if let RepetitionCount = &buildstrategy {size+1} else {csize+1}
+                            });
                         }
                     }
                 }
-                if x!=1 && !processed.contains_key(&x) {
-                    processed.insert(x,size);
-                    for (y,ysize) in processed.iter() {
-                        // if *ysize+size>=k {continue;}
-                        match &builder.values[*y].0 {
-                            LValue(_)=>{res.add_rule(9,vec![*y,x,0],x);}
-                            RValue(_)=>{res.add_rule(9,vec![*y,0,x],x);}
-                            _=>{}
-                        }
-                        match &builder.values[x].0 {
-                            LValue(_)=>{res.add_rule(9,vec![x,*y,0],*y);}
-                            RValue(_)=>{res.add_rule(9,vec![x,0,*y],*y);}
-                            _=>{}
-                        }
-                    }
-                }
-                for xt in xtl.iter() {
-                    processed_rel.entry(*xt).or_default().push((x,size));
-                }//processed_rel is meant to have duplicate entries: one for each type.
             }
-            let StackElem{
+            let StackElem {
                 input,
                 res,
                 accepting_states,
                 ..
             } = stack.pop().unwrap();
-            // println!("{:?} resulted in: {:#?}",DebugValue{t:input,expr:builder},res);
-            // println!("constructed one.");
-            // println!("determinizing...");
-            // res.determinize();
-            // println!("converting...");
-            // if accepting_states.len()==0 {return None}
-            // if accepting_states.len()>1 {
-            //     panic!("needs some more development...")
-            // }
             graph_buffer.insert(input,res);
-            // println!("converted!");
-            
             previous_accepting_states.insert(input,accepting_states);
         }
-        // println!("converting...");
+        let res = graph_buffer.remove(&input).unwrap();
+        // println!("converting... {} states...",res.rules.len());
         let accepting_states : Vec<_> = previous_accepting_states[&input].iter().copied().collect();
-        let (states,vm) = graph_buffer.remove(&input).unwrap().convert(self,&accepting_states);
-        (self.simplify(states),vm)
+        let states = res.convert(self,&accepting_states,interp);
+        self.simplify(states)
     }
 }
 

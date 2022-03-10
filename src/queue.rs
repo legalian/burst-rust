@@ -2,7 +2,7 @@
 
 use std::cmp::Ordering;
 
-
+#[derive(Debug)]
 pub struct QueueElem<T> {
     pub item:T,
     pub priority:usize
