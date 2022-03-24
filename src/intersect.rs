@@ -3,39 +3,18 @@
 use std::collections::hash_map::Entry::*;
 use std::mem::{take};
 use std::iter::{*};
-use crate::ntfa::{*};
+use crate::nfta::{*};
 use std::cmp::{min,max};
 use std::vec::IntoIter;
 
 
 
-impl NTFABuilder {
-    pub fn intersect(&mut self,a_start:usize,b_start:usize,k_limit:Option<usize>)->Option<usize> {
-        if a_start==b_start {return Some(a_start);}
-        if a_start==0 {return Some(a_start);}
-        if 0==b_start {return Some(b_start);}
-        struct ArtificialStack {
-            outercollect: Vec<(Transition,Vec<usize>)>,
-            innercollect: Vec<usize>,
-            outertrav: IntoIter<(Transition,Vec<(usize,usize)>)>,
-            innertrav: Vec<(usize,usize)>,
-            innertoken: Transition,
-            place:usize
-        }
-        let mut stack:Vec<ArtificialStack> = Vec::new();
-        let outerkey = (min(a_start,b_start),max(a_start,b_start));
-        let place = match self.intersect_memo.entry(outerkey) {
-            Vacant(_) => {
-                let place = self.get_placeholder();
-                self.intersect_memo.insert(outerkey,Some(place));place
-            }
-            Occupied(z)=>{return *z.get();}
-        };
-
-        fn getmergedvl(
+impl<T:Clone> NFTABuilder<T> {
+    pub fn intersect(&mut self,a_side:Vec<usize>,b_side:Vec<usize>,k_limit:Option<usize>)->Vec<usize> {
+        fn getmergedvl<T>(
             al:&[(Transition,Vec<usize>)],
             bl:&[(Transition,Vec<usize>)],
-            paths:&[(Vec<(Transition,Vec<usize>)>,Option<usize>,Vec<(usize,(usize,TermClassification))>)],
+            paths:&[(Vec<(Transition,Vec<usize>)>,Option<usize>,Vec<(usize,T)>)],
             k_limit:Option<usize>
         )->IntoIter<(Transition,Vec<(usize,usize)>)> {
             let mut a=0;
@@ -75,25 +54,57 @@ impl NTFABuilder {
             for (_,j) in deps.iter_mut() {j.reverse();}
             deps.into_iter()
         }
+        struct ArtificialStack {
+            outercollect: Vec<(Transition,Vec<usize>)>,
+            innercollect: Vec<usize>,
+            outertrav: IntoIter<(Transition,Vec<(usize,usize)>)>,
+            innertrav: Vec<(usize,usize)>,
+            innertoken: Transition,
+            place:usize,
+            lastval:(usize,usize),
+            resultant:bool
+        }
+        let mut stack:Vec<ArtificialStack> = Vec::new();
 
-        let mut outertrav = getmergedvl(&self.paths[a_start].0,&self.paths[b_start].0,&self.paths,k_limit);
-        // println!("VL: {:?}\n{:?}\n{:?}",&self.paths[a_start].0,&self.paths[b_start].0,outertrav);
-        let (innertoken,intv) = match outertrav.next() {
-            Some(x)=>x,None=>{println!("EARLY NONE");return None;}
-        };
-        // let mut tracker = OccuranceTracker::new();
-        // tracker.add_unconfirmed(place);
-        stack.push(ArtificialStack{
-            outercollect:Vec::new(),
-            innercollect:Vec::new(),
-            outertrav,
-            innertoken,
-            innertrav:intv,
-            place,
-        });
+
+        let mut hook = Vec::new();
+        for a_start in a_side.iter().copied() {
+            for b_start in b_side.iter().copied() {
+                if a_start==b_start {hook.push(a_start);continue;}
+                if a_start==0 {hook.push(b_start);continue;}
+                if 0==b_start {hook.push(a_start);continue;}
+                let outerkey = (min(a_start,b_start),max(a_start,b_start));
+                let place = match self.intersect_memo.entry(outerkey) {
+                    Vacant(_) => {
+                        let place = self.get_placeholder();
+                        self.intersect_memo.insert(outerkey,Some(place));place
+                    }
+                    Occupied(z)=>{
+                        if let Some(k) = z.get() {
+                            hook.push(*k);
+                        }
+                        continue;
+                    }
+                };
+                let mut outertrav = getmergedvl(&self.paths[a_start].0,&self.paths[b_start].0,&self.paths,k_limit);
+                let (innertoken,intv) = match outertrav.next() {
+                    Some(x)=>x,None=>{continue;}
+                };
+                stack.push(ArtificialStack{
+                    outercollect:Vec::new(),
+                    innercollect:Vec::new(),
+                    outertrav,
+                    innertoken,
+                    innertrav:intv,
+                    place,
+                    lastval:outerkey,
+                    resultant:true
+                });
+            }
+        }
+
         let mut extrapass = Vec::new();
-        let hook = 'hook: loop {
-            let x = stack.last_mut().unwrap();
+        while let Some(x) = stack.last_mut() {
             loop {
                 if let Some(subl) = x.innertrav.pop() {
                     match if subl.0==0 || subl.0==subl.1 {Some(Some(subl.1))}
@@ -115,6 +126,8 @@ impl NTFABuilder {
                                     innertoken,
                                     innertrav:intv,
                                     place,
+                                    lastval:subl,
+                                    resultant:false
                                 });
                                 break;
                             } else {x.innercollect.clear();}
@@ -129,28 +142,26 @@ impl NTFABuilder {
                     x.innertrav=intv;
                 } else {
                     let ff = stack.pop().unwrap();
-                    let lastval = match stack.last() {
-                        Some(x)=>*x.innertrav.last().unwrap(),
-                        None=>outerkey
-                    };
                     // tracker.depends_on(ff.place,&ff.outercollect);
                     let rpv = if ff.outercollect.len()==0 {None} else {
-                        let chain = self.paths[lastval.0].2.iter().copied().chain(self.paths[lastval.1].2.iter().copied()).collect();
+                        let chain = self.paths[ff.lastval.0].2.iter().cloned().chain(self.paths[ff.lastval.1].2.iter().cloned()).collect();
                         let u = self.insert_into_placeholder(ff.outercollect,ff.place,chain);
                         extrapass.push(u);
                         Some(u)
                     };
                     if rpv != Some(ff.place) {
-                        self.intersect_memo.insert(lastval,rpv);
+                        self.intersect_memo.insert(ff.lastval,rpv);
                     }
-                    if stack.len()==0 {break 'hook rpv;}
+                    if let Some(k) = rpv {
+                        if ff.resultant {hook.push(k);}
+                    }
                     break;
                 }
             }
         };
-        if hook.is_none() {println!("NORMAL NONE");return None;}
+        if hook.len() == 0 {return hook;}
         self.accessibility_cleaning(&extrapass,k_limit);
-        if self.paths[hook.unwrap()].1.is_none() {println!("LATE NONE");return None;}
+        hook.retain(|j|self.paths[*j].1.is_none());
         hook
     }
 

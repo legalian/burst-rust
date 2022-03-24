@@ -6,11 +6,10 @@ use std::collections::BinaryHeap;
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::collections::hash_map::Entry::*;
-use crate::ntfa::{*};
+use crate::nfta::{*};
 use crate::spec::{*};
 use crate::dsl::{*};
 use crate::queue::{*};
-use crate::debug::{*};
 use Dsl::{*};
 use Transition::{*};
 use TermClassification::{*};
@@ -40,7 +39,7 @@ pub struct FunctionEntry {
 }
 
 #[derive(Clone,Copy,PartialEq,Eq,PartialOrd,Ord,Hash,Debug)]
-enum TypeMapType {
+pub enum TypeMapType {
     Constructor(usize),
     Function(usize)
 }
@@ -54,7 +53,7 @@ pub struct ConstructorEntry {
 pub struct ExpressionBuilder {
     pub functions:Vec<FunctionEntry>,
     functionmemo:HashMap<(usize,Box<[usize]>),usize>,
-    stupid_typemap:HashMap<usize,Vec<(TypeMapType,usize)>>,
+    pub stupid_typemap:HashMap<usize,Vec<(TypeMapType,usize)>>,
     placeholderfunc:Option<usize>,
     value_hashes:HashMap<(usize,Vec<usize>),usize>,
     pub values:Vec<(ProcValue,usize)>,
@@ -171,6 +170,13 @@ impl ExpressionBuilder {
             }
         }
     }
+    pub fn evaluate_solitary(&mut self,a:&Dsl,arg:usize) -> Option<usize> {
+        match self.substitute(&a,0,0,Rc::new(vec![(vec![BaseValue(arg)],0)])) {
+            BaseValue(y)=>Some(y),
+            _=>None
+            // k=>panic!("failed to resolve to concrete value! \nfunction: {:#?}\n{:?}\n{:?}\n",a,DebugValue{t:arg,expr:self},k)
+        }
+    }
     pub fn exec_interior_recursive_function(&mut self,arg:usize) -> usize {
         let whatev = &mut self.temporary_recursive_memo.as_mut().unwrap().2;
         let tsize = self.values[arg].1;
@@ -184,11 +190,9 @@ impl ExpressionBuilder {
             return *z;
         }
         let trsh = self.temporary_recursive_memo.as_ref().unwrap().1.clone();
-        let res = match self.substitute(&trsh,0,0,Rc::new(vec![(vec![BaseValue(arg)],0)])) {
-            BaseValue(y)=>{
-                self.temporary_recursive_memo.as_ref().unwrap().0.borrow_mut().insert(arg,y);y
-            }
-            k=>panic!("failed to resolve to concrete value! \nfunction: {:#?}\n{:?}\n{:?}\n",trsh,DebugValue{t:arg,expr:self},k)
+        let res = match self.evaluate_solitary(&trsh,arg){
+            Some(z)=>{self.temporary_recursive_memo.as_ref().unwrap().0.borrow_mut().insert(arg,z);z},
+            None=>panic!()
         };
         self.temporary_recursive_memo.as_mut().unwrap().2.pop();
         res
@@ -262,51 +266,7 @@ impl ExpressionBuilder {
     }
 }
 
-enum RComp {
-    Same,
-    Smaller,
-    Unrelated
-}
-use RComp::{*};
-impl RComp {
-    fn ok(&self)->bool {
-        match self {
-            Smaller=>true,
-            _=>false
-        }
-    }
-}
-
-fn compare_strictlysmaller(
-    builder:&ExpressionBuilder,
-    subexpressions : &mut HashMap<usize,HashSet<usize>>,
-    a:usize,
-    b:usize
-)->RComp {
-    if a==b {return Same;}
-    if builder.values[a].1>=builder.values[b].1 { return Unrelated }
-    // else {return Smaller;} //uncomment this line to allow recursion into ANY smaller value
-    if let Some(x) = subexpressions.get(&b) {
-        if x.contains(&a) {return Smaller;}
-    }
-    match (&builder.values[a].0,&builder.values[b].0) {
-        (Const(ax,ay),Const(bx,by)) if ax==bx => {//match compare_strictlysmaller(builder,subexpressions,*ax,*bx)
-            let mut smaller = false;
-            for (ay,by) in ay.iter().zip(by.iter()) {
-                match compare_strictlysmaller(builder,subexpressions,*ay,*by) {
-                    Unrelated=>{return Unrelated}
-                    Smaller=>{smaller=true;}
-                    Same=>{}
-                }
-            }
-            if smaller {Smaller} else {Same}
-        }//uncomment the following line to allow any expression where a subexpression was replaced by a strict subexpression.
-        // (LValue(a),LValue(b))|(RValue(a),RValue(b))=>compare_strictlysmaller(builder,subexpressions,*a,*b),
-        _=>Unrelated
-    }
-}
-
-impl NTFABuilder {
+impl<T:Clone> NFTABuilder<T> {
     pub fn new(input_type:usize,output_type:usize)->Self {
         //state space:
         // 0:uneval
@@ -324,7 +284,7 @@ impl NTFABuilder {
         // 9:switch      (3)
         // 10:recursion  (1)
         // 11-onwards: free space!
-        NTFABuilder {
+        NFTABuilder {
             input_type,output_type,
             paths:vec![(Vec::new(),Some(1),Vec::new())],//inner vec must be sorted
             // revhash:HashMap::new(),
@@ -335,231 +295,19 @@ impl NTFABuilder {
             purgeset:HashSet::new()
         }
     }
+}
 
-
-
-
-
-
-    // pub fn build_symmetric_ntfa(
-    //     &mut self,
-    //     builder:&mut ExpressionBuilder,
-    //     input:usize,
-    //     outputs:&HashMap<usize,BaseLiteral>,
-    //     confirmer:&Confirmer,
-    //     previous_accepting_states:&mut HashMap<usize,HashSet<usize>>,
-    //     // graph_buffer : &mut HashMap<usize,PartialNTFA>,
-    //     subexpressions : &mut HashMap<usize,HashSet<usize>>,
-    //     k:usize,interp:usize
-    // )->Option<usize> {
-    //     let mut processed : Vec<(usize,usize,usize)> = Vec::new();
-    //     let mut processed_rel : HashMap<usize,Vec<(usize,usize)>> = HashMap::new();
-    //     let mut visited : HashMap<usize,(usize,bool)> = HashMap::new();
-    //     let mut accepting_states : HashSet<usize> = HashSet::new();
-    //     let mut smaller_unbound_inputs : Vec<usize> = Vec::new();
-    //     let mut queue = BinaryHeap::new();
-    //     let mut res = PartialNTFA::new();
-    //     res.add_rule(Input,Vec::new(),input);
-    //     queue.push(QueueElem{item:(input,self.input_type,true),priority:1});
-    //     for nul in builder.get_nullary_constructors() {
-    //         let resultant = builder.get_constructed(nul,Vec::new());
-    //         let rtype = builder.constructors[nul].restype;
-    //         res.add_rule(Transition::Construct(nul),Vec::new(),resultant);
-    //         queue.push(QueueElem{item:(resultant,rtype,true),priority:1});
-    //     }
-    //     let output = outputs.get(&input).cloned();
-    //     while let Some(QueueElem{item:(x,xt,fresh),priority:size}) = queue.pop() {
-    //         if size>=k {break;}
-    //         if match visited.entry(x) {
-    //             Occupied(mut y)=>{
-    //                 let yg = *y.get();
-    //                 if fresh && !yg.1 {
-    //                     y.insert((yg.0,true));false
-    //                 } else {true}
-    //             },
-    //             Vacant(y)=>{y.insert((size,fresh));false}
-    //         } {continue;}
-    //         if xt == self.input_type && compare_strictlysmaller(builder,subexpressions,x,input).ok() {
-    //             println!("back to the drawing board. From {:?} to {:?}",DebugValue{t:input,expr:builder},DebugValue{t:x,expr:builder});
-    //             match previous_accepting_states.get(&x) {
-    //                 Some(b)=>{
-    //                     for bub in b {
-    //                         println!("possible link found. f({:?}) = {:?}",DebugValue{t:x,expr:builder},DebugValue{t:*bub,expr:builder});
-    //                         res.add_rule(Recursion,vec![x],*bub);
-    //                         queue.push(QueueElem{item:(*bub,self.output_type,true),priority:size+1});
-    //                     }
-    //                 }
-    //                 None => {
-    //                     smaller_unbound_inputs.push(x);
-    //                     if let Some(z) = processed_rel.get(&self.output_type) {
-    //                         for (z,_) in z {
-    //                             res.add_rule(Recursion,vec![x],*z);
-    //                         }
-    //                     }
-    //                     // queue.push(QueueElem{item:(x,xt,fresh),priority:size});
-    //                     // stack.push(new_stack_elem(
-    //                     //     x,
-    //                     //     self.input_type,
-    //                     //     outputs,
-    //                     //     builder
-    //                     // ));
-    //                     // continue 'stackloop;
-    //                 }
-    //             }
-    //         }
-    //         res.add_rule(Constant(x),Vec::new(),x);
-    //         if fresh {
-    //             match (&builder.values[x].0,&builder.types[xt]) {
-    //                 (Const(j,y),EnumType(v))=>{
-    //                     for (i,(y,yt)) in y.iter().zip(v[builder.constructors[*j].index].iter()).enumerate() {
-    //                         res.add_rule(Destruct(*j,i),vec![x],*y);
-    //                         queue.push(QueueElem{item:(*y,*yt,true),priority:size+1});
-    //                     }
-    //                 }
-    //                 _=>{}
-    //             }
-    //         }
-    //         processed.push((x,xt,size));
-    //         for (y,yt,ysize) in processed.iter() {
-    //             if *ysize+size>=k {continue;}
-    //             if fresh {
-    //                 match (&builder.values[x].0,&builder.types[xt]) {
-    //                     (Const(j,_),EnumType(v)) if v.len()>1 =>{
-    //                         let index = builder.constructors[*j].index;
-    //                         let mut nvm = vec![x];
-    //                         nvm.resize(1+v.len(),0);
-    //                         nvm[index+1]=*y;
-    //                         res.add_rule(Switch(v.len()),nvm,*y);
-    //                     }
-    //                     _=>{}
-    //                 }
-    //             }
-    //             if visited[y].1 {
-    //                 match (&builder.values[*y].0,&builder.types[*yt]) {
-    //                     (Const(j,_),EnumType(v)) if v.len()>1 =>{
-    //                         let index = builder.constructors[*j].index;
-    //                         let mut nvm = vec![*y];
-    //                         nvm.resize(1+v.len(),0);
-    //                         nvm[index+1]=x;
-    //                         res.add_rule(Switch(v.len()),nvm,x);
-    //                     }
-    //                     _=>{}
-    //                 }
-    //             }
-    //         }
-    //         if xt==self.output_type {
-    //             for z in smaller_unbound_inputs.iter() {
-    //                 res.add_rule(Recursion,vec![*z],x);
-    //             }
-    //             let oua = if let Some(y) = &output {y.accepts(x)} else {true};
-    //             if oua && confirmer.accepts(builder,input,x) {
-    //                 // println!("processing ACTUAL RESULT! {:?}",DebugValue{t:x,expr:builder});
-    //                 accepting_states.insert(x);
-    //             }
-    //             // else {
-    //             //     println!("processing POSSIBLE RESULT! {:?}",DebugValue{t:x,expr:builder});
-    //             // }
-    //         }
-    //         // else {
-    //         //     // println!("processing! {:?}",DebugValue{t:x,expr:builder});
-    //         // }
-    //         processed_rel.entry(xt).or_default().push((x,size));
-    //         if let Some(z) = builder.stupid_typemap.get(&xt) {
-    //             let z=z.clone();
-    //             for (f_ind,s_ind) in z.iter() {
-    //                 let (argtypes,restype) = match f_ind {
-    //                     Function(x)=>{
-    //                         let FunctionEntry {argtypes,restype,..} = &builder.functions[*x];
-    //                         (argtypes,restype)
-    //                     }
-    //                     Constructor(x)=>{
-    //                         let ConstructorEntry {argtypes,restype,..} = &builder.constructors[*x];
-    //                         (argtypes,restype)
-    //                     }
-    //                 };
-    //                 let restype=*restype;
-    //                 let mut cartesian = vec![(Vec::new(),0)];
-    //                 for (i,argtype) in argtypes.into_iter().enumerate() {
-    //                     if i==*s_ind {
-    //                         for (c,ss) in cartesian.iter_mut() {c.push(x);*ss+=size}
-    //                         // println!("operated on cartesian {:?}",cartesian);
-    //                         continue;
-    //                     }
-    //                     let mut swap_buf = Vec::new();
-    //                     if let Some(v) = processed_rel.get(&argtype) {
-    //                         for (u,usi) in v.iter() {
-    //                             for (cart,csize) in cartesian.iter() {
-    //                                 swap_buf.push({let mut cc=cart.clone();cc.push(*u);(cc,csize+usi)});
-    //                             }
-    //                         }
-    //                     }
-    //                     cartesian=swap_buf;
-    //                     if cartesian.len()==0 {break;}
-    //                     // println!("increasing {:?} to {:?}",cartesian,swap_buf);
-    //                 }
-    //                 // println!("calling function: {:?} {:?}",argtypes,cartesian);
-    //                 for (cart,csize) in cartesian.into_iter() {
-    //                     if csize>=k {continue;}
-    //                     let exec = match f_ind {
-    //                         Constructor(x)=>{
-    //                             let exec = builder.get_constructed(*x,cart.clone());
-    //                             res.add_rule(Transition::Construct(*x),cart,exec);exec
-    //                         }
-    //                         Function(x)=>{
-    //                             let exec = builder.exec_function(*x,cart.clone());
-    //                             res.add_rule(ArbitraryFunc(*x),cart,exec);exec
-    //                         }
-    //                     };
-    //                     queue.push(QueueElem{item:(exec,restype,true),priority:csize+1});
-    //                 }
-    //             }
-    //         }
-    //     }
-    //     // println!("{:?} resulted in: {:#?}",DebugValue{t:input,expr:builder},res);
-    //     // println!("constructed one.");
-    //     // println!("determinizing...");
-    //     // res.determinize();
-    //     // println!("converting...");
-    //     // if accepting_states.len()==0 {return None}
-    //     // if accepting_states.len()>1 {
-    //     //     panic!("needs some more development...")
-    //     // }
-    //     // graph_buffer.insert(input,res);
-    //     // println!("converted!");
-        
-    //     previous_accepting_states.insert(input,accepting_states);
-        
-    //     println!("converting...");
-    //     let accepting_states : Vec<_> = previous_accepting_states[&input].iter().copied().collect();
-    //     let states = res.convert(self,&accepting_states,interp);
-    //     self.simplify(states)
-    // }
-
-
-
-
-
-
-
-
-
-
-
-    pub fn build_ntfa(
+impl NFTABuilder<usize> {
+    pub fn build_nfta(
         &mut self,
         builder:&mut ExpressionBuilder,
         input:usize,
-        outputs:&HashMap<usize,BaseLiteral>,
         confirmer:&Confirmer,
-        previous_accepting_states:&mut HashMap<usize,HashSet<(usize,TermClassification)>>,
-        graph_buffer : &mut HashMap<usize,PartialNTFA>,
-        subexpressions : &mut HashMap<usize,HashSet<usize>>,
-        term_size_limiter : &mut HashMap<usize,usize>,
+        disjunct_spec:&mut SingleSpecDisjunct,
+        subex:&mut SubexpressionFinder,
         k:usize,interp:usize
-    )->Option<usize> {
-    //     println!("-=-=-=-=-=-=-=-=-=- BEGINNING BUILD PHASE: {:?}",DebugValue{val:input,ty:input_type,expr:builder});
+    )->Vec<usize> {
         let buildstrategy = RepetitionCount;
-        let recursionstrategy = ApproximateAcceptingStates;
         let limiterstrategy = SizeLimited;
         enum LimitingStrategy {
             SizeLimited,
@@ -572,264 +320,220 @@ impl NTFABuilder {
             RepetitionCount,
         }
         use BuildStrategy::{*};
-        enum RecursionStrategy {
-            ApproximateAcceptingStates,
-            BuildSmallerGraphs
-        }
-        use RecursionStrategy::{*};
-        #[derive(Default)]
-        struct StackElem {
-            input : usize,
-            output : Option<BaseLiteral>,
-            res : PartialNTFA,
-            processed : Vec<(usize,usize,TermClassification,usize)>,
-            processed_rel : HashMap<usize,Vec<(usize,TermClassification,usize)>>,//type:val,size
-            queue : BinaryHeap<QueueElem<(usize,usize,TermClassification)>>,
-            visited : HashMap<(usize,TermClassification),usize>,
-            accepting_states : HashSet<(usize,TermClassification)>,
-            smaller_unbound_inputs : Vec<(usize,TermClassification)>
-        }
-        fn new_stack_elem(
-            input:usize,
-            input_type:usize,
-            outputs:&HashMap<usize,BaseLiteral>,
-            builder:&mut ExpressionBuilder
-        )->StackElem {
-            let mut queue = BinaryHeap::new();
-            let mut res = PartialNTFA::new();
+        let mut processed : Vec<(usize,usize,TermClassification,usize)> = Vec::new();
+        let mut processed_rel : HashMap<usize,Vec<(usize,TermClassification,usize)>> = HashMap::new();//type:val,size
+        let mut queue : BinaryHeap<QueueElem<(usize,usize,TermClassification)>> = BinaryHeap::new();
+        let mut visited : HashMap<(usize,TermClassification),usize> = HashMap::new();
+        let mut smaller_unbound_inputs : Vec<(usize,TermClassification)> = Vec::new();
+        let SingleSpecElem {
+            graph_buffer : ref mut res,
+            ref mut accepting_states,
+            ref mut term_size_limiter,
+            state : ref mut output
+        } = disjunct_spec.states.get_mut(&input).unwrap();
+        let mut res = res;
+        let mut accepting_states = accepting_states;
+        let mut term_size_limiter = term_size_limiter;
+        let mut output = output;
+        if res.rules.len()==0 {
             res.add_rule(Input,Vec::new(),(input,Elimination));
-            queue.push(QueueElem{item:(input,input_type,Elimination),priority:1});
+            queue.push(QueueElem{item:(input,self.input_type,Elimination),priority:1});
             for nul in builder.get_nullary_constructors() {
                 let resultant = builder.get_constructed(nul,Vec::new());
                 let rtype = builder.constructors[nul].restype;
                 res.add_rule(Transition::Construct(nul),Vec::new(),(resultant,Introduction));
                 queue.push(QueueElem{item:(resultant,rtype,Introduction),priority:1});
             }
-            StackElem{
-                input,
-                output:outputs.get(&input).cloned(),
-                queue:queue,
-                res,
-                ..Default::default()
-            }
         }
-        let mut stack : Vec<StackElem> = vec![new_stack_elem(
-            input,
-            self.input_type,
-            outputs,
-            builder
-        )];
-        'stackloop: while let Some(StackElem{
-            input,
-            output,
-            res,
-            processed,
-            processed_rel,
-            queue,
-            visited,
-            accepting_states,
-            smaller_unbound_inputs
-        }) = stack.last_mut() {
-            let input=*input;
-            while let Some(QueueElem{item:(x,xt,fresh),priority:size}) = queue.pop() {
-                if size>k {break;}
-                match visited.entry((x,fresh)) {
-                    Occupied(p)=>{
-                        if *p.get()>size {panic!()}
-                        continue;
-                    },
-                    Vacant(y)=>{y.insert(size);}
-                }
-                // println!("processing: {} {} {:?}",size,k,DebugValue{t:x,expr:builder});
-                if xt == self.input_type && compare_strictlysmaller(builder,subexpressions,x,input).ok() {
-                    match previous_accepting_states.get(&x) {
-                        Some(b)=>{
-                            for (bub,_) in b {
-                                res.add_rule(Recursion,vec![(x,fresh)],(*bub,Elimination));
-                                queue.push(QueueElem{item:(*bub,self.output_type,Elimination),priority:size+1});
-                            }
+        while let Some(QueueElem{item:(x,xt,fresh),priority:size}) = queue.pop() {
+            if size>k {break;}
+            match visited.entry((x,fresh)) {
+                Occupied(p)=>{
+                    if *p.get()>size {panic!()}
+                    continue;
+                },
+                Vacant(y)=>{y.insert(size);}
+            }
+            // println!("processing: {} {} {:?}",size,k,DebugValue{t:x,expr:builder});
+            if xt == self.input_type && subex.compare_strictlysmaller(builder,x,input).ok() {
+                let we = disjunct_spec.states.get(&x).cloned();
+                let o = disjunct_spec.states.get_mut(&input).unwrap();
+                res = &mut o.graph_buffer;
+                accepting_states = &mut o.accepting_states;
+                term_size_limiter = &mut o.term_size_limiter;
+                output = &mut o.state;        
+                match we {
+                    Some(b)=>{
+                        let bacc = b.accepting_states.clone();
+                        for (bub,_) in bacc {
+                            res.add_rule(Recursion,vec![(x,fresh)],(bub,Elimination));
+                            queue.push(QueueElem{item:(bub,self.output_type,Elimination),priority:size+1});
                         }
-                        None => {
-                            if let ApproximateAcceptingStates = recursionstrategy {
-                                smaller_unbound_inputs.push((x,fresh));
-                                if let Some(z) = processed_rel.get(&self.output_type) {
-                                    for (z,zfresh,_) in z {
-                                        res.add_rule(Recursion,vec![(x,fresh)],(*z,*zfresh));
-                                    }
-                                }
-                            }
-                            if let BuildSmallerGraphs = recursionstrategy {
-                                println!("pushing to stack...");
-                                visited.remove(&(x,fresh));
-                                queue.push(QueueElem{item:(x,xt,fresh),priority:size});
-                                stack.push(new_stack_elem(
-                                    x,
-                                    self.input_type,
-                                    outputs,
-                                    builder
-                                ));
-                                continue 'stackloop;
+                    }
+                    None => {
+                        smaller_unbound_inputs.push((x,fresh));
+                        if let Some(z) = processed_rel.get(&self.output_type) {
+                            for (z,zfresh,_) in z {
+                                res.add_rule(Recursion,vec![(x,fresh)],(*z,*zfresh));
                             }
                         }
                     }
                 }
-                // res.add_rule(Constant(x),Vec::new(),x);
-                if let Elimination = fresh {
-                    match (&builder.values[x].0,&builder.types[xt]) {
-                        (Const(j,y),EnumType(v))=>{
-                            for (i,(y,yt)) in y.iter().zip(v[builder.constructors[*j].index].iter()).enumerate() {
-                                if let SizeLimited = &limiterstrategy {
-                                    if term_size_limiter.get(y).copied().unwrap_or(2)+builder.values[input].1 <= builder.values[*y].1 {
-                                        continue;
-                                    }
+            }
+            // res.add_rule(Constant(x),Vec::new(),x);
+            if let Elimination = fresh {
+                match (&builder.values[x].0,&builder.types[xt]) {
+                    (Const(j,y),EnumType(v))=>{
+                        for (i,(y,yt)) in y.iter().zip(v[builder.constructors[*j].index].iter()).enumerate() {
+                            if let SizeLimited = &limiterstrategy {
+                                if *term_size_limiter+builder.values[input].1 <= builder.values[*y].1 {
+                                    continue;
                                 }
-                                if let SizeCalculationStopAtRule = &buildstrategy {
-                                    if size>=k {continue;}
-                                }
-                                res.add_rule(Destruct(*j,i),vec![(x,fresh)],(*y,Elimination));
-                                if let SizeCalculationStopAtNode = &buildstrategy {
-                                    if size>=k {continue;}
-                                }
-                                queue.push(QueueElem{item:(*y,*yt,Elimination),priority:size+1});
                             }
+                            if let SizeCalculationStopAtRule = &buildstrategy {
+                                if size>=k {continue;}
+                            }
+                            res.add_rule(Destruct(*j,i),vec![(x,fresh)],(*y,Elimination));
+                            if let SizeCalculationStopAtNode = &buildstrategy {
+                                if size>=k {continue;}
+                            }
+                            queue.push(QueueElem{item:(*y,*yt,Elimination),priority:size+1});
+                        }
+                    }
+                    _=>{}
+                }
+            }
+            processed.push((x,xt,fresh,size));
+            if let Elimination = fresh {
+                for (y,yt,yfresh,ysize) in processed.iter() {
+                    if let SizeCalculationStopAtRule = &buildstrategy {
+                        if *ysize+2*size>=k {continue;}
+                    }
+                    match (&builder.values[x].0,&builder.types[xt]) {
+                        (Const(j,_),EnumType(v)) if v.len()>1 =>{
+                            let index = builder.constructors[*j].index;
+                            let mut nvm = vec![(x,fresh)];
+                            nvm.resize(1+v.len(),(0,Introduction));
+                            nvm[index+1]=(*y,*yfresh);
+                            res.add_rule(Switch(v.len()),nvm,(*y,Introduction));
+                            if let SizeCalculationStopAtNode = &buildstrategy {
+                                if *ysize+2*size>=k {continue;}
+                            }
+                            queue.push(QueueElem{item:(*y,*yt,Introduction),
+                                priority:if let RepetitionCount = &buildstrategy {size+1} else {*ysize+2*size+1}
+                            });
                         }
                         _=>{}
                     }
                 }
-                processed.push((x,xt,fresh,size));
-                if let Elimination = fresh {
-                    for (y,yt,yfresh,ysize) in processed.iter() {
-                        if let SizeCalculationStopAtRule = &buildstrategy {
-                            if *ysize+2*size>=k {continue;}
-                        }
-                        match (&builder.values[x].0,&builder.types[xt]) {
-                            (Const(j,_),EnumType(v)) if v.len()>1 =>{
-                                let index = builder.constructors[*j].index;
-                                let mut nvm = vec![(x,fresh)];
-                                nvm.resize(1+v.len(),(0,Introduction));
-                                nvm[index+1]=(*y,*yfresh);
-                                res.add_rule(Switch(v.len()),nvm,(*y,Introduction));
-                                if let SizeCalculationStopAtNode = &buildstrategy {
-                                    if *ysize+2*size>=k {continue;}
-                                }
-                                queue.push(QueueElem{item:(*y,*yt,Introduction),
-                                    priority:if let RepetitionCount = &buildstrategy {size+1} else {*ysize+2*size+1}
-                                });
-                            }
-                            _=>{}
-                        }
+            }
+            for (y,yt,yfresh,ysize) in processed.iter() {
+                if let Elimination = yfresh {
+                    if let SizeCalculationStopAtRule = &buildstrategy {
+                        if 2*ysize+size>=k {continue;}
                     }
-                }
-                for (y,yt,yfresh,ysize) in processed.iter() {
-                    if let Elimination = yfresh {
-                        if let SizeCalculationStopAtRule = &buildstrategy {
-                            if 2*ysize+size>=k {continue;}
-                        }
-                        match (&builder.values[*y].0,&builder.types[*yt]) {
-                            (Const(j,_),EnumType(v)) if v.len()>1 =>{
-                                let index = builder.constructors[*j].index;
-                                let mut nvm = vec![(*y,*yfresh)];
-                                nvm.resize(1+v.len(),(0,Introduction));
-                                nvm[index+1]=(x,fresh);
-                                res.add_rule(Switch(v.len()),nvm,(x,Introduction));
-                                if let SizeCalculationStopAtNode = &buildstrategy {
-                                    if 2*ysize+size>=k {continue;}
-                                }
-                                queue.push(QueueElem{item:(x,xt,Introduction),
-                                    priority:if let RepetitionCount = &buildstrategy {size+1} else {2*ysize+size+1}
-                                });
-                            }
-                            _=>{}
-                        }
-                    }
-                }
-                if xt==self.output_type {
-                    for z in smaller_unbound_inputs.iter() {
-                        res.add_rule(Recursion,vec![*z],(x,fresh));
-                    }
-                    let oua = if let Some(y) = &output {y.accepts(x)} else {true};
-                    if oua && confirmer.accepts(builder,input,x) {
-                        accepting_states.insert((x,fresh));
-                    }
-                }
-                processed_rel.entry(xt).or_default().push((x,fresh,size));
-                if let Some(z) = builder.stupid_typemap.get(&xt) {
-                    let z=z.clone();
-                    for (f_ind,s_ind) in z.iter() {
-                        let (argtypes,restype) = match f_ind {
-                            Function(x)=>{
-                                let FunctionEntry {argtypes,restype,..} = &builder.functions[*x];
-                                (argtypes,restype)
-                            }
-                            Constructor(x)=>{
-                                let ConstructorEntry {argtypes,restype,..} = &builder.constructors[*x];
-                                (argtypes,restype)
-                            }
-                        };
-                        let restype=*restype;
-                        let mut cartesian = vec![(Vec::new(),0)];
-                        for (i,argtype) in argtypes.into_iter().enumerate() {
-                            if i==*s_ind {
-                                for (c,ss) in cartesian.iter_mut() {c.push((x,fresh));*ss+=size}
-                                // println!("operated on cartesian {:?}",cartesian);
-                                continue;
-                            }
-                            let mut swap_buf = Vec::new();
-                            if let Some(v) = processed_rel.get(&argtype) {
-                                for (u,ufresh,usi) in v.iter() {
-                                    for (cart,csize) in cartesian.iter() {
-                                        swap_buf.push({let mut cc=cart.clone();cc.push((*u,*ufresh));(cc,csize+usi)});
-                                    }
-                                }
-                            }
-                            cartesian=swap_buf;
-                            if cartesian.len()==0 {break;}
-                        }
-                        for (cart,csize) in cartesian.into_iter() {
-                            if let SizeCalculationStopAtRule = &buildstrategy {
-                                if csize>=k {continue;}
-                            }
-                            let exec = match f_ind {
-                                Constructor(x)=>builder.get_constructed(*x,cart.iter().map(|(k,_)|*k).collect()),
-                                Function(x)=>builder.exec_function(*x,cart.iter().map(|(k,_)|*k).collect())
-                            };
-                            if let SizeLimited = &limiterstrategy {
-                                if term_size_limiter.get(&exec).copied().unwrap_or(2)+builder.values[input].1 <= builder.values[exec].1 {
-                                    continue;
-                                }
-                            }
-                            match f_ind {
-                                Constructor(x)=>{
-                                    res.add_rule(Transition::Construct(*x),cart,(exec,Introduction));
-                                }
-                                Function(x)=>{
-                                    res.add_rule(ArbitraryFunc(*x),cart,(exec,Introduction));
-                                }
-                            }
+                    match (&builder.values[*y].0,&builder.types[*yt]) {
+                        (Const(j,_),EnumType(v)) if v.len()>1 =>{
+                            let index = builder.constructors[*j].index;
+                            let mut nvm = vec![(*y,*yfresh)];
+                            nvm.resize(1+v.len(),(0,Introduction));
+                            nvm[index+1]=(x,fresh);
+                            res.add_rule(Switch(v.len()),nvm,(x,Introduction));
                             if let SizeCalculationStopAtNode = &buildstrategy {
-                                if csize>=k {continue;}
+                                if 2*ysize+size>=k {continue;}
                             }
-                            queue.push(QueueElem{item:(exec,restype,Introduction),
-                                priority:if let RepetitionCount = &buildstrategy {size+1} else {csize+1}
+                            queue.push(QueueElem{item:(x,xt,Introduction),
+                                priority:if let RepetitionCount = &buildstrategy {size+1} else {2*ysize+size+1}
                             });
                         }
+                        _=>{}
                     }
                 }
             }
-            let StackElem {
-                input,
-                res,
-                accepting_states,
-                ..
-            } = stack.pop().unwrap();
-            graph_buffer.insert(input,res);
-            previous_accepting_states.insert(input,accepting_states);
+            if xt==self.output_type {
+                for z in smaller_unbound_inputs.iter() {
+                    res.add_rule(Recursion,vec![*z],(x,fresh));
+                }
+                if output.accepts(x) && confirmer.accepts(builder,input,x) {
+                    accepting_states.insert((x,fresh));
+                }
+            }
+            processed_rel.entry(xt).or_default().push((x,fresh,size));
+            if let Some(z) = builder.stupid_typemap.get(&xt) {
+                let z=z.clone();
+                for (f_ind,s_ind) in z.iter() {
+                    let (argtypes,restype) = match f_ind {
+                        Function(x)=>{
+                            let FunctionEntry {argtypes,restype,..} = &builder.functions[*x];
+                            (argtypes,restype)
+                        }
+                        Constructor(x)=>{
+                            let ConstructorEntry {argtypes,restype,..} = &builder.constructors[*x];
+                            (argtypes,restype)
+                        }
+                    };
+                    let restype=*restype;
+                    let mut cartesian = vec![(Vec::new(),0)];
+                    for (i,argtype) in argtypes.into_iter().enumerate() {
+                        if i==*s_ind {
+                            for (c,ss) in cartesian.iter_mut() {c.push((x,fresh));*ss+=size}
+                            // println!("operated on cartesian {:?}",cartesian);
+                            continue;
+                        }
+                        let mut swap_buf = Vec::new();
+                        if let Some(v) = processed_rel.get(&argtype) {
+                            for (u,ufresh,usi) in v.iter() {
+                                for (cart,csize) in cartesian.iter() {
+                                    swap_buf.push({let mut cc=cart.clone();cc.push((*u,*ufresh));(cc,csize+usi)});
+                                }
+                            }
+                        }
+                        cartesian=swap_buf;
+                        if cartesian.len()==0 {break;}
+                    }
+                    for (cart,csize) in cartesian.into_iter() {
+                        if let SizeCalculationStopAtRule = &buildstrategy {
+                            if csize>=k {continue;}
+                        }
+                        let exec = match f_ind {
+                            Constructor(x)=>builder.get_constructed(*x,cart.iter().map(|(k,_)|*k).collect()),
+                            Function(x)=>builder.exec_function(*x,cart.iter().map(|(k,_)|*k).collect())
+                        };
+                        if let SizeLimited = &limiterstrategy {
+                            if *term_size_limiter+builder.values[input].1 <= builder.values[exec].1 {
+                                continue;
+                            }
+                        }
+                        match f_ind {
+                            Constructor(x)=>{
+                                res.add_rule(Transition::Construct(*x),cart,(exec,Introduction));
+                            }
+                            Function(x)=>{
+                                res.add_rule(ArbitraryFunc(*x),cart,(exec,Introduction));
+                            }
+                        }
+                        if let SizeCalculationStopAtNode = &buildstrategy {
+                            if csize>=k {continue;}
+                        }
+                        queue.push(QueueElem{item:(exec,restype,Introduction),
+                            priority:if let RepetitionCount = &buildstrategy {size+1} else {csize+1}
+                        });
+                    }
+                }
+            }
         }
-        let res = graph_buffer.remove(&input).unwrap();
+        // let StackElem {
+        //     input,
+        //     res,
+        //     accepting_states,
+        //     ..
+        // } = stack.pop().unwrap();
+        // graph_buffer.insert(input,res);
+        // previous_accepting_states.insert(input,accepting_states);
+        // }
+        // let res = graph_buffer.remove(&input).unwrap();
         // println!("converting... {} states...",res.rules.len());
-        let accepting_states : Vec<_> = previous_accepting_states[&input].iter().copied().collect();
-        let states = res.convert(self,&accepting_states,interp);
-        self.simplify(states)
+        res.convert(self,&accepting_states.iter().copied().collect(),interp,NoMapping)
     }
 }
 

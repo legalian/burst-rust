@@ -3,7 +3,7 @@
 use crate::dsl::{Dsl,ExpressionContext};
 use crate::mlsparser::{Program,Value,Type};
 use crate::nftabuilder::{ExpressionBuilder,ProcType,ProcValue};
-use crate::ntfa::{PartialNTFA,NTFABuilder,Transition,TermClassification};
+use crate::nfta::{PartialNFTA,NFTABuilder,Transition};
 use std::fmt::Write;
 use core::fmt::{Debug,Formatter,Error};
 use std::collections::HashMap;
@@ -20,7 +20,7 @@ use ProcValue::{*};
 use Transition::{*};
 
 
-impl NTFABuilder {
+impl<T:Debug> NFTABuilder<T> {
     pub fn count_relevant_states(&self,a:usize) {
         let mut relevant = HashSet::new();
         let mut stack = vec![a];
@@ -77,13 +77,13 @@ impl NTFABuilder {
     }
 }
 
-struct DebugNTFAline<'a> {
+struct DebugNFTAline<'a,T:Debug> {
     token:Transition,
-    arglist:&'a Vec<(usize,TermClassification)>,
-    fin:(usize,TermClassification),
+    arglist:&'a Vec<T>,
+    fin:T,
     expr:&'a ExpressionBuilder
 }
-impl<'a> Debug for DebugNTFAline<'a> {
+impl<'a,T:Debug> Debug for DebugNFTAline<'a,T> {
     fn fmt(&self, f: &mut Formatter) -> Result<(),Error> {
         match self.token {
             Constant(x)=>f.write_fmt(format_args!("const[{:?}]",DebugValue{t:x,expr:self.expr})),
@@ -109,12 +109,12 @@ impl<'a> Debug for DebugNTFAline<'a> {
     }
 }
 
-struct NTFAline<'a> {
+struct NFTAline<'a,T:Debug> {
     token:Transition,
-    arglist:&'a Vec<(usize,TermClassification)>,
-    fin:(usize,TermClassification)
+    arglist:&'a Vec<T>,
+    fin:T
 }
-impl<'a> Debug for NTFAline<'a> {
+impl<'a,T:Debug> Debug for NFTAline<'a,T> {
     fn fmt(&self, f: &mut Formatter) -> Result<(),Error> {
         match self.token {
             Constant(x)=>f.write_fmt(format_args!("const[{:?}]",x)),
@@ -166,30 +166,30 @@ impl<'a> Debug for AcceptingStates<'a> {
 }
 
 
-pub struct DebugPartialNTFA<'a> {
-    pub t:&'a PartialNTFA,
+pub struct DebugPartialNFTA<'a,N> {
+    pub t:&'a PartialNFTA<N>,
     pub expr:&'a ExpressionBuilder,
 }
-impl<'a> Debug for DebugPartialNTFA<'a> {
+impl<'a,N:Debug+Copy> Debug for DebugPartialNFTA<'a,N> {
     fn fmt(&self, f: &mut Formatter) -> Result<(),Error> {
         let mut builder = f.debug_list();
         for (last,ab) in &self.t.rules {
             if ab.len()==0 {panic!("empty entry")}
             for (tok,rest) in ab {
-                builder.entry(&DebugNTFAline{expr:self.expr,token:*tok,arglist:rest,fin:*last});
+                builder.entry(&DebugNFTAline{expr:self.expr,token:*tok,arglist:rest,fin:*last});
             }
         }
         builder.finish()
     }
 }
 
-impl Debug for PartialNTFA {
+impl<N:Debug+Copy> Debug for PartialNFTA<N> {
     fn fmt(&self, f: &mut Formatter) -> Result<(),Error> {
         let mut builder = f.debug_list();
         for (last,ab) in &self.rules {
             if ab.len()==0 {panic!("empty entry")}
             for (tok,rest) in ab {
-                builder.entry(&NTFAline{token:*tok,arglist:rest,fin:*last});
+                builder.entry(&NFTAline{token:*tok,arglist:rest,fin:*last});
             }
         }
         builder.finish()

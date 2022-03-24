@@ -7,6 +7,7 @@ name = "burst"
 version = "0.1.0"
 dependencies = [
  "nom",
+ "odds",
 ]
 
 [[package]]
@@ -31,6 +32,38 @@ dependencies = [
  "minimal-lexical",
  "version_check",
 ]
+
+[[package]]
+name = "odds"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bfe9f693ec5bf79b8867b34aeaa5a2500e3a90461b486b573bcad3cca42b4d9e"
+dependencies = [
+ "rawpointer",
+ "rawslice",
+ "unchecked-index",
+]
+
+[[package]]
+name = "rawpointer"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "60a357793950651c4ed0f3f52338f53b2f809f32d83a07f72909fa13e4c6c1e3"
+
+[[package]]
+name = "rawslice"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8e23c908b26a742e5e3768ea42f19225ef809d3c9e3071bfe3e01c7e9b6fd1cd"
+dependencies = [
+ "rawpointer",
+]
+
+[[package]]
+name = "unchecked-index"
+version = "0.2.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "eeba86d422ce181a719445e51872fa30f1f7413b62becb52e95ec91aa262d85c"
 
 [[package]]
 name = "version_check"

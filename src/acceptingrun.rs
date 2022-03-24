@@ -7,7 +7,7 @@ use std::collections::BinaryHeap;
 use std::collections::hash_map::Entry::*;
 use std::rc::Rc;
 use std::iter::{*};
-use crate::ntfa::{*};
+use crate::nfta::{*};
 use crate::dsl::{*};
 use crate::nftabuilder::{*};
 use std::cmp::Ordering;
@@ -15,60 +15,81 @@ use Ordering::{*};
 use Dsl::{*};
 use Transition::{*};
 
+pub trait SpecLike:Sized+Clone+Eq+Ord {
+    fn get_narrow(&self) -> Option<usize>;
+    fn moregeneral(&self,other:&Self,builder:&mut ExpressionBuilder)->bool;
+    fn intersection(&self,other:&Self,builder:&mut ExpressionBuilder)->Option<Self>;
+}
+impl SpecLike for usize {
+    fn get_narrow(&self) -> Option<usize> {Some(*self)}
+    fn moregeneral(&self,other:&Self,_builder:&mut ExpressionBuilder)->bool {self==other}
+    fn intersection(&self,other:&Self,_builder:&mut ExpressionBuilder)->Option<Self> {
+        if self==other {Some(*self)} else {None}
+    }
+}
+
+// "each assignment you contain can also be nested inside an assignment in the other"
+
+
 #[derive(Debug)]
-enum Assignment {
-    Join(Rc<Assignment>,Rc<Assignment>),
-    More(Rc<Assignment>,usize,usize),
-    Just(usize,usize)
+enum Assignment<L:SpecLike> {
+    Join(Rc<Assignment<L>>,Rc<Assignment<L>>),
+    More(Rc<Assignment<L>>,L,L),
+    Just(L,L)
 }
 use Assignment::{*};
-struct AssignmentIterator<'a> {
-    s:Option<&'a Assignment>,
-    backlog:Vec<&'a Assignment>
+struct AssignmentIterator<'a,L:SpecLike> {
+    s:Option<&'a Assignment<L>>,
+    backlog:Vec<&'a Assignment<L>>
 }
-impl Assignment {
-    fn iter(&self) -> impl Iterator<Item=(usize,usize)> + '_ {
+impl<L:SpecLike> Assignment<L> {
+    fn iter<'a>(&'a self) -> impl Iterator<Item=(&'a L,&'a L)> + '_ {
         AssignmentIterator {
             s:Some(self),
             backlog:Vec::new()
         }
     }
-    fn get(&self,a:usize)->Option<usize> {
+    fn getnarrow(&self,a:usize,builder:&mut ExpressionBuilder)->Option<L> {
+        let mut res = None;
         for (j,k) in self.iter() {
-            if j==a {return Some(k)}
-        } None
+            if j.get_narrow()==Some(a) {res=match res {
+                None=>Some(k.clone()),
+                Some(k2)=>Some(k2.intersection(&k,builder).unwrap())
+            }}
+        } res
     }
 }
-fn tovec(a:&Option<Rc<Assignment>>) -> Vec<(usize,usize)> {
+fn tovec<L:SpecLike>(a:&Option<Rc<Assignment<L>>>) -> Vec<(L,L)> {
     match a {
         None=>Vec::new(),
         Some(z)=>{
-            let mut k : Vec<_> = z.iter().collect();
+            let mut k : Vec<_> = z.iter().map(|(a,b)|(a.clone(),b.clone())).collect();
             k.sort_unstable();
             k.dedup();
             k
         }
     }
 }
-fn subset(a:&Option<Rc<Assignment>>,b:&Option<Rc<Assignment>>) -> bool {
+fn subset<L:SpecLike>(a:&Option<Rc<Assignment<L>>>,b:&Option<Rc<Assignment<L>>>,builder:&mut ExpressionBuilder) -> bool {
     if let Some(z)=a {//inserting subset of present
-        if let Some(xx)=b {z.iter().all(|(k,v)|xx.get(k)==Some(v))}
-        else {false}
+        if let Some(xx)=b {z.iter().all(|(k,v)|{
+            xx.iter().any(|(k2,v2)|k.moregeneral(k2,builder)&&v2.moregeneral(v,builder))
+        })} else {false}
     } else {true}
 }
-impl<'a> Iterator for AssignmentIterator<'a> {
-    type Item = (usize,usize);
-    fn next(&mut self)->Option<(usize,usize)> {
+impl<'a,L:SpecLike> Iterator for AssignmentIterator<'a,L> {
+    type Item = (&'a L,&'a L);
+    fn next(&mut self)->Option<(&'a L,&'a L)> {
         loop {
             match self.s {
                 None=>{return None;}
                 Some(Just(k,b))=>{
                     self.s=self.backlog.pop();
-                    return Some((*k,*b));
+                    return Some((k,b));
                 }
                 Some(More(p,k,b))=>{
                     self.s=Some(p);
-                    return Some((*k,*b));
+                    return Some((k,b));
                 }
                 Some(Join(p,j))=>{
                     self.backlog.push(p);
@@ -78,19 +99,23 @@ impl<'a> Iterator for AssignmentIterator<'a> {
         }
     }
 }
-fn nondisjoint_assignment_union(a:Option<Rc<Assignment>>,b:Option<Rc<Assignment>>) -> Option<Rc<Assignment>> {
+fn nondisjoint_assignment_union<L:SpecLike>(a:Option<Rc<Assignment<L>>>,b:Option<Rc<Assignment<L>>>) -> Option<Rc<Assignment<L>>> {
     match (a,b) {
         (None,b)|(b,None)=>b,
         (Some(a),Some(b))=>Some(Rc::new(Join(a,b)))
     }
 }
-fn disjoint_assignment_union(a:Option<Rc<Assignment>>,b:Option<Rc<Assignment>>) -> Option<Option<Rc<Assignment>>> {
+fn disjoint_assignment_union<L:SpecLike>(a:Option<Rc<Assignment<L>>>,b:Option<Rc<Assignment<L>>>,builder:&mut ExpressionBuilder) -> Option<Option<Rc<Assignment<L>>>> {
     match (a,b) {
         (None,b)|(b,None)=>Some(b),
         (Some(a),Some(b))=>{
             for (ak,ac) in a.iter() {
-                for (bk,bc) in b.iter() {
-                    if ak == bk && ac != bc {return None;}
+                if let Some(z) = ak.get_narrow() {
+                    if let Some(w) = b.getnarrow(z,builder) {
+                        if ac.intersection(&w,builder).is_none() {
+                            return None;
+                        }
+                    }
                 }
             }
             Some(Some(Rc::new(Join(a,b))))
@@ -110,20 +135,21 @@ fn disjoint_union(mut a:HashMap<usize,usize>,b:HashMap<usize,usize>) -> Option<H
 }
 
 
-impl NTFABuilder {
-
+impl<L:SpecLike> NFTABuilder<L> {
     pub fn get_boring_accepting_run(
         &self,
-        start:usize,
+        start:Vec<usize>,
         builder:&mut ExpressionBuilder
-    ) -> (Dsl,usize,Vec<(usize,usize)>) {
-        let mut queue : BinaryHeap<SolutionStatusWrap> = BinaryHeap::new();
-        queue.push(SolutionStatusWrap(start,0,None));
-        let mut solns : HashMap<usize,Rc<SolutionStatus>> = HashMap::new();
-        let mut working : HashMap<usize,Vec<(&[usize],Vec<Rc<SolutionStatus>>,Transition,usize,usize)>> = HashMap::new();
+    ) -> (Dsl,usize,Vec<(L,L)>) {
+        let mut queue : BinaryHeap<SolutionStatusWrap<L>> = BinaryHeap::new();
+        for s in start.iter() {
+            queue.push(SolutionStatusWrap(*s,0,None));
+        }
+        let mut solns : HashMap<usize,Rc<SolutionStatus<L>>> = HashMap::new();
+        let mut working : HashMap<usize,Vec<(&[usize],Vec<Rc<SolutionStatus<L>>>,Transition,usize,usize)>> = HashMap::new();
         let mut visited : HashSet<usize> = HashSet::new();
         while let Some(SolutionStatusWrap(x,minsize,updown)) = queue.pop() {
-            let mut stack:Vec<(&[usize],Vec<Rc<SolutionStatus>>,Transition,usize,usize)> = Vec::new();
+            let mut stack:Vec<(&[usize],Vec<Rc<SolutionStatus<L>>>,Transition,usize,usize)> = Vec::new();
             match updown {
                 None=>{
                     if !visited.insert(x) {continue;}
@@ -139,6 +165,10 @@ impl NTFABuilder {
                     }
                 }
                 Some(sol)=>{
+                    if start.contains(&x) {
+                        let SolutionStatus {dsl:a,size:b,mapping:c,..} = sol;
+                        return (a,b,tovec(&c));
+                    }
                     let sol = match solns.entry(x) {
                         Occupied(_)=>{continue;}
                         Vacant(y)=>{y.insert(Rc::new(sol))}
@@ -167,24 +197,25 @@ impl NTFABuilder {
                 }
             }
         }
-        let SolutionStatus {dsl:a,size:b,mapping:c,..} = &*solns.remove(&start).unwrap();
-        (a.clone(),*b,tovec(c))
+        panic!("no solution!");
     }
 
 
 
     pub fn get_accepting_runs(
         &self,
-        start:usize,
+        start:Vec<usize>,
         builder:&mut ExpressionBuilder
-    ) -> Vec<(Dsl,usize,Vec<(usize,usize)>)> {
-        let mut queue : BinaryHeap<SolutionStatusWrap> = BinaryHeap::new();
-        queue.push(SolutionStatusWrap(start,0,None));
-        let mut solns : HashMap<usize,Vec<Rc<SolutionStatus>>> = HashMap::new();
-        let mut working : HashMap<usize,Vec<(&[usize],Vec<Rc<SolutionStatus>>,Transition,usize,usize)>> = HashMap::new();
+    ) -> Vec<(Dsl,usize,Vec<(L,L)>)> {
+        let mut queue : BinaryHeap<SolutionStatusWrap<L>> = BinaryHeap::new();
+        for s in start.iter() {
+            queue.push(SolutionStatusWrap(*s,0,None));
+        }
+        let mut solns : HashMap<usize,Vec<Rc<SolutionStatus<L>>>> = HashMap::new();
+        let mut working : HashMap<usize,Vec<(&[usize],Vec<Rc<SolutionStatus<L>>>,Transition,usize,usize)>> = HashMap::new();
         let mut visited : HashSet<usize> = HashSet::new();
         while let Some(SolutionStatusWrap(x,minsize,updown)) = queue.pop() {
-            let mut stack:Vec<(&[usize],Vec<Rc<SolutionStatus>>,Transition,usize,usize)> = Vec::new();
+            let mut stack:Vec<(&[usize],Vec<Rc<SolutionStatus<L>>>,Transition,usize,usize)> = Vec::new();
             match updown {
                 None=>{
                     if !visited.insert(x) {continue;}
@@ -202,7 +233,7 @@ impl NTFABuilder {
                     }
                 }
                 Some(sol)=>{
-                    let sol = match sol.insert(solns.entry(x).or_default()) {None=>{continue;},Some(x)=>x};
+                    let sol = match sol.insert(solns.entry(x).or_default(),builder) {None=>{continue;},Some(x)=>x};
                     for (l,v,f,y,minsize) in working.get(&x).into_iter().flatten() {
                         let mut v2=v.clone();
                         v2.push(sol.clone());
@@ -227,7 +258,15 @@ impl NTFABuilder {
                 working.entry(l[0]).or_default().push((&l[1..],v,f,x,minsize));
             }
         }
-        solns.remove(&start).unwrap_or_default().into_iter().map(|x|{
+        let mut result = Vec::new();
+        for s in start.iter() {
+            if let Some(z) = solns.remove(&s) {
+                for x in z {
+                    (*x).clone().insert(&mut result,builder);
+                }
+            }
+        }
+        result.into_iter().map(|x|{
             let SolutionStatus{dsl:a,size:b,mapping:c,..} = &*x;
             (a.clone(),*b,tovec(c))
         }).collect()
@@ -236,39 +275,39 @@ impl NTFABuilder {
 
 
 #[derive(Clone,Debug)]
-struct SolutionStatus {
+struct SolutionStatus<L:SpecLike> {
     dsl:Dsl,
     size:usize,
-    mapping:Option<Rc<Assignment>>,
+    mapping:Option<Rc<Assignment<L>>>,
     node:usize
 }
 #[derive(Debug)]
-struct SolutionStatusWrap(usize,usize,Option<SolutionStatus>);
-impl Eq for SolutionStatusWrap {}
-impl Ord for SolutionStatusWrap {
+struct SolutionStatusWrap<L:SpecLike>(usize,usize,Option<SolutionStatus<L>>);
+impl<L:SpecLike> Eq for SolutionStatusWrap<L> {}
+impl<L:SpecLike> Ord for SolutionStatusWrap<L> {
     fn cmp(&self, other: &Self) -> Ordering {other.1.cmp(&self.1)}
 }
-impl PartialOrd for SolutionStatusWrap {
+impl<L:SpecLike> PartialOrd for SolutionStatusWrap<L> {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {Some(other.1.cmp(&self.1))}
 }
-impl PartialEq<SolutionStatusWrap> for SolutionStatusWrap {
+impl<L:SpecLike> PartialEq<SolutionStatusWrap<L>> for SolutionStatusWrap<L> {
     fn eq(&self, other: &Self) -> bool {self.1 == other.1}
 }
 
-impl SolutionStatus {
-    fn compare_usefulness(&self,other:&SolutionStatus)->Ordering {
+impl<L:SpecLike> SolutionStatus<L> {
+    fn compare_usefulness(&self,other:&SolutionStatus<L>,builder:&mut ExpressionBuilder)->Ordering {
         let SolutionStatus{size:s,mapping:m,..} = other;
-        match (subset(m,&self.mapping),subset(&self.mapping,m),self.size.cmp(s)) {
+        match (subset(m,&self.mapping,builder),subset(&self.mapping,m,builder),self.size.cmp(s)) {
             (true,_,Greater|Equal)=>Less,
             (_,true,Less|Equal)=>Greater,
             _=>Equal
         }
     }
-    fn insert(self,l:&mut Vec<Rc<SolutionStatus>>) -> Option<&mut Rc<SolutionStatus>> {
+    fn insert<'a>(self,l:&'a mut Vec<Rc<SolutionStatus<L>>>,builder:&mut ExpressionBuilder) -> Option<&'a mut Rc<SolutionStatus<L>>> {
         let mut j = 0;
         loop {
             if j==l.len() {l.push(Rc::new(self));return l.last_mut();}
-            match self.compare_usefulness(&l[j]) {
+            match self.compare_usefulness(&l[j],builder) {
                 Less=>{return None;}
                 Greater=>{l.remove(j);}
                 Equal=>{j+=1;}
@@ -277,26 +316,24 @@ impl SolutionStatus {
     }
     fn absolute_carry(
         a:Transition,
-        v:&Vec<Rc<SolutionStatus>>,
+        v:&Vec<Rc<SolutionStatus<L>>>,
         builder:&mut ExpressionBuilder,
-        ntfa:&NTFABuilder,
+        nfta:&NFTABuilder<L>,
         x:usize
-    )->SolutionStatus {
+    )->SolutionStatus<L> {
         let size = v.iter().map(|x|x.size).sum::<usize>()+1;
         // let ex = v.iter().map(|x|&x.value).collect::<Vec<_>>();
         let mut mapping = v.iter().fold(None,|a,x|nondisjoint_assignment_union(a,x.mapping.clone()));
         if let Recursion=a {
-            let mut inp = ntfa.paths[v[0].node].2.clone();
-            let oup = &ntfa.paths[x].2;
-            while let Some((f,_)) = inp.first().copied() {
-                let mut ins = Vec::new();
-                inp.retain(|(z,(a,_))|if *z==f {ins.push(*a);false} else {true});
-                // if ins.len()>1 {panic!("program is attempting to generate an inner disjunction, which isn't supported yet.")}
-                let outs : Vec<_> = oup.iter().filter(|(z,_)|*z==f).map(|(_,(z,_))|*z).collect();
-                // if outs.len()>1 {panic!("program is attempting to generate an inner disjunction, which isn't supported yet.")}
+            let oup = &nfta.paths[x].2;
+            for (f,in_l) in nfta.paths[v[0].node].2.iter() {
+                let out_l = match oup.iter().find(|(z,_)|z==f){
+                    None=>{continue;}
+                    Some((_,z))=>z
+                };
                 mapping=Some(Rc::new(match mapping {
-                    None=>Just(ins[0],outs[0]),
-                    Some(x)=>More(x,ins[0],outs[0])
+                    None=>Just(in_l.clone(),out_l.clone()),
+                    Some(x)=>More(x,in_l.clone(),out_l.clone())
                 }));
             }
         }
@@ -314,38 +351,39 @@ impl SolutionStatus {
             dsl,size,mapping,node:x
         }
     }
+
     fn optional_carry(
         a:Transition,
-        v:&Vec<Rc<SolutionStatus>>,
+        v:&Vec<Rc<SolutionStatus<L>>>,
         builder:&mut ExpressionBuilder,
-        ntfa:&NTFABuilder,
+        nfta:&NFTABuilder<L>,
         x:usize
-    )->Option<SolutionStatus> {
+    )->Option<SolutionStatus<L>> {
         let size = v.iter().map(|x|x.size).sum::<usize>()+1;
         // let ex = v.iter().map(|x|&x.value).collect::<Vec<_>>();
         let mut mapping = match v.iter().fold(Some(None),|a,x|match a {
             None=>None,
-            Some(a)=>disjoint_assignment_union(a,x.mapping.clone())
+            Some(a)=>disjoint_assignment_union(a,x.mapping.clone(),builder)
         }) {
             Some(a)=>a,
             None=>{return None;}
         };
         if let Recursion=a {
-            let mut inp = ntfa.paths[v[0].node].2.clone();
-            let oup = &ntfa.paths[x].2;
-            while let Some((f,_)) = inp.first().copied() {
-                let mut ins = Vec::new();
-                inp.retain(|(z,(a,_))|if *z==f {ins.push(*a);false} else {true});
-                // if ins.len()>1 {panic!("program is attempting to generate an inner disjunction, which isn't supported yet.")}
-                let outs : Vec<_> = oup.iter().filter(|(z,_)|*z==f).map(|(_,(z,_))|*z).collect();
-                // if outs.len()>1 {panic!("program is attempting to generate an inner disjunction, which isn't supported yet.")}
+            let oup = &nfta.paths[v[0].node].2;
+            for (f,out_l) in nfta.paths[x].2.iter() {
+                let in_l = match oup.iter().find(|(z,_)|z==f){
+                    None=>{continue;}
+                    Some((_,z))=>z
+                };
                 mapping=Some(Rc::new(match mapping {
-                    None=>Just(ins[0],outs[0]),
+                    None=>Just(in_l.clone(),out_l.clone()),
                     Some(x)=>{
-                        if let Some(u) = x.get(ins[0]) {
-                            if u != outs[0] {return None}
+                        if let Some(in_s) = in_l.get_narrow() {
+                            if let Some(u) = x.getnarrow(in_s,builder) {
+                                if u.intersection(out_l,builder).is_none() {return None}
+                            }
                         }
-                        More(x,ins[0],outs[0])
+                        More(x,in_l.clone(),out_l.clone())
                     }
                 }));
             }

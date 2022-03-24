@@ -1,6 +1,6 @@
 // use crate::nftabuilder::{*};
 // use crate::spec::{*};
-// use crate::ntfa::{*};
+// use crate::nfta::{*};
 // use crate::queue::{*};
 // use std::collections::BinaryHeap;
 // use std::collections::HashMap;
@@ -10,76 +10,68 @@
 // use ProcValue::{*};
 // use crate::debug::{*};
 // use RefineLiteral::{*};
-// use crate::synthesis::{extract_subexpressions};
 
 
 // pub fn new_synthesize(
 //     mut exprbuilder:ExpressionBuilder,
-//     spec:SpecVariant,
+//     spec:SingleSpecDisjunct,
 //     input_type:usize,
 //     output_type:usize
 // ) {
-//     let mut ntfabuilder = NTFABuilder::new(input_type,output_type);
+//     let mut subex : SubexpressionFinder = SubexpressionFinder::new();
+//     let mut nftabuilder = NFTABuilder::new(input_type,output_type);
 //     let confirmer = spec.getconfirmer();
 //     let mut heap = BinaryHeap::new();
 //     heap.push(QueueElem{ item:spec, priority:0 });
 //     while let Some(QueueElem{ item:mut spec, .. }) = heap.pop() {
 //         println!("popping!");
-//         'specloop: while let Some(states) = spec.get_next() {
-//             let mut graph_buffer : HashMap<usize,PartialNTFA> = HashMap::new();
-//             let mut accepting_states : HashMap<usize,HashSet<(usize,TermClassification)>> = HashMap::new();
-//             let mut opntfa : Option<usize> = None;
-//             let mut subexpressions = extract_subexpressions(&mut exprbuilder,&states);
-//             let mut order = states.keys().copied().collect::<Vec<_>>();
+//         'specloop: for disjunct in spec.get_truesets().iter_mut() {
+//             let mut order = disjunct.states.keys().copied().collect::<Vec<_>>();
 //             order.sort_unstable_by_key(|x|exprbuilder.values[*x].1);
-//             let mut debug_converted = Vec::new();
-//             let mut debug_intersected = Vec::new();
+
+//             // let mut debug_converted = Vec::new();
+//             // let mut debug_intersected = Vec::new();
 //             for (interp,a) in order.into_iter().enumerate() {
-//                 println!("building ntfa for: {:?}",DebugValue {
+//                 println!("building nfta for: {:?}",DebugValue {
 //                     t:a,
 //                     expr:&exprbuilder
 //                 });
-//                 let newntfa = match ntfabuilder.build_ntfa(
+//                 let newnfta = match nftabuilder.build_nfta(
 //                     &mut exprbuilder,
 //                     a,
-//                     &states,
 //                     &confirmer,
-//                     &mut accepting_states,
-//                     &mut graph_buffer,
-//                     &mut subexpressions,
-//                     10,interp
+//                     disjunct,
+//                     &mut subex,
+//                     100000,interp
 //                 ) {
 //                     Some(z)=>z,
 //                     _=>{
 //                         //mark into omega
-//                         panic!("No accepting states after ntfa built");
-//                         if !spec.increment() {break 'specloop}
+//                         println!("No accepting states after nfta built");
 //                         continue 'specloop
 //                     }
 //                 };
-//                 debug_converted.push(newntfa);
-//                 opntfa = match opntfa {
-//                     None=>Some(newntfa),
+//                 // debug_converted.push(newnfta);
+//                 disjunct.opnfta = match disjunct.opnfta {
+//                     None=>Some(newnfta),
 //                     Some(oldstate)=>{
 //                         // println!("intersecting...");
-//                         if let Some(intstate) = ntfabuilder.intersect(newntfa,oldstate,None).and_then(|u|{ntfabuilder.simplify(vec![u])})  {
-//                             debug_intersected.push(intstate);
+//                         if let Some(intstate) = nftabuilder.intersect(newnfta,oldstate,None).and_then(|u|{nftabuilder.simplify(vec![u])})  {
+//                             // debug_intersected.push(intstate);
 //                             Some(intstate)
 //                         } else {
 //                             //mark into omega
-//                             panic!("No accepting states after intersection");
-//                             if !spec.increment() {break 'specloop}
+//                             println!("No accepting states after intersection");
 //                             continue 'specloop
 //                         }
 //                     }
 //                 };
 //             }
 //             println!("generating accepting run!");
-//             let ntfa = opntfa.unwrap();
-//             let accrunlist = ntfabuilder.get_accepting_runs(ntfa,&mut exprbuilder);
+//             let nfta = disjunct.opnfta.unwrap();
+//             let accrunlist = nftabuilder.get_accepting_runs(nfta,&mut exprbuilder);
 //             if accrunlist.len()==0 {
 //                 panic!("No accepting runs");
-//                 if !spec.increment() {break 'specloop}
 //                 continue 'specloop
 //             }
 

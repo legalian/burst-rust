@@ -4,6 +4,10 @@ use crate::mlsparser::{*};
 use crate::nftabuilder::{*};
 use crate::spec::{*};
 use crate::debug::{*};
+use crate::afta::{*};
+
+use std::cmp::Ordering;
+use Ordering::{*};
 
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -22,6 +26,8 @@ use ProcValue::{*};
 use ProcType::{*};
 use SpecVariant::{*};
 use RefineLiteral::{*};
+use Skeleton::{*};
+
 
 
 
@@ -33,7 +39,7 @@ pub enum ProcPattern {
 }
 use ProcPattern::{*};
 
-#[derive(Clone,PartialEq,Eq)]
+#[derive(Clone,PartialEq,Eq,Hash)]
 pub enum Dsl {
     RecursivePlaceholder,
 
@@ -50,6 +56,83 @@ pub enum Dsl {
     NeqProg(Box<Dsl>,Box<Dsl>)
 }
 use Dsl::{*};
+
+
+impl PartialOrd for Dsl {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        match (self,other) {
+            (RecursivePlaceholder,RecursivePlaceholder)=>Some(Equal),
+            (RecursivePlaceholder,_)=>Some(Less),
+            (_,RecursivePlaceholder)=>Some(Greater),
+            (TransferStack(ax,ay),TransferStack(bx,by)) => Some((ax,ay).cmp(&(bx,by))),
+            (TransferStack(_,_),_)=>Some(Less),
+            (_,TransferStack(_,_))=>Some(Greater),
+            (AccessStack(a),AccessStack(b)) => Some(a.cmp(b)),
+            (AccessStack(_),_)=>Some(Less),
+            (_,AccessStack(_))=>Some(Greater),
+            (ApplyStack(ax,ay),ApplyStack(bx,by)) => Some((ax,ay).cmp(&(bx,by))),
+            (ApplyStack(_,_),_)=>Some(Less),
+            (_,ApplyStack(_,_))=>Some(Greater),
+            (Deconstruct(ax,ay,az),Deconstruct(bx,by,bz)) => Some((ax,ay,az).cmp(&(bx,by,bz))),
+            (Deconstruct(_,_,_),_)=>Some(Less),
+            (_,Deconstruct(_,_,_))=>Some(Greater),
+            (Construct(ax,ay),Construct(bx,by)) => Some((ax,ay).cmp(&(bx,by))),
+            (Construct(_,_),_)=>Some(Less),
+            (_,Construct(_,_))=>Some(Greater),
+            (BaseValue(a),BaseValue(b)) => Some(a.cmp(b)),
+            (BaseValue(_),_)=>Some(Less),
+            (_,BaseValue(_))=>Some(Greater),
+            (SwitchValue(ax,ay),SwitchValue(bx,by)) => Some((ax,ay).cmp(&(bx,by))),
+            (SwitchValue(_,_),_)=>Some(Less),
+            (_,SwitchValue(_,_))=>Some(Greater),
+            (EqProg(ax,ay),EqProg(bx,by)) => Some((ax,ay).cmp(&(bx,by))),
+            (EqProg(_,_),_)=>Some(Less),
+            (_,EqProg(_,_))=>Some(Greater),
+            (NeqProg(ax,ay),NeqProg(bx,by)) => Some((ax,ay).cmp(&(bx,by))),
+        //     (NeqProg(_,_),_)=>Some(Less),
+        //     (_,NeqProg(_,_))=>Some(Greater),
+        }
+    }
+}
+impl Ord for Dsl {
+    fn cmp(&self,other:&Self) -> Ordering {
+        match (self,other) {
+            (RecursivePlaceholder,RecursivePlaceholder)=>Equal,
+            (RecursivePlaceholder,_)=>Less,
+            (_,RecursivePlaceholder)=>Greater,
+            (TransferStack(ax,ay),TransferStack(bx,by)) => (ax,ay).cmp(&(bx,by)),
+            (TransferStack(_,_),_)=>Less,
+            (_,TransferStack(_,_))=>Greater,
+            (AccessStack(a),AccessStack(b)) => a.cmp(b),
+            (AccessStack(_),_)=>Less,
+            (_,AccessStack(_))=>Greater,
+            (ApplyStack(ax,ay),ApplyStack(bx,by)) => (ax,ay).cmp(&(bx,by)),
+            (ApplyStack(_,_),_)=>Less,
+            (_,ApplyStack(_,_))=>Greater,
+            (Deconstruct(ax,ay,az),Deconstruct(bx,by,bz)) => (ax,ay,az).cmp(&(bx,by,bz)),
+            (Deconstruct(_,_,_),_)=>Less,
+            (_,Deconstruct(_,_,_))=>Greater,
+            (Construct(ax,ay),Construct(bx,by)) => (ax,ay).cmp(&(bx,by)),
+            (Construct(_,_),_)=>Less,
+            (_,Construct(_,_))=>Greater,
+            (BaseValue(a),BaseValue(b)) => a.cmp(b),
+            (BaseValue(_),_)=>Less,
+            (_,BaseValue(_))=>Greater,
+            (SwitchValue(ax,ay),SwitchValue(bx,by)) => (ax,ay).cmp(&(bx,by)),
+            (SwitchValue(_,_),_)=>Less,
+            (_,SwitchValue(_,_))=>Greater,
+            (EqProg(ax,ay),EqProg(bx,by)) => (ax,ay).cmp(&(bx,by)),
+            (EqProg(_,_),_)=>Less,
+            (_,EqProg(_,_))=>Greater,
+            (NeqProg(ax,ay),NeqProg(bx,by)) => (ax,ay).cmp(&(bx,by)),
+            // (NeqProg(_,_),_)=>Less,
+            // (_,NeqProg(_,_))=>Greater,
+        }
+    }
+}
+
+
+
 
 
 impl ExpressionBuilder {
@@ -77,8 +160,7 @@ impl ExpressionBuilder {
                 let blen = b.len();
                 let mut b=b.into_iter();
                 let hooh = if amt>blen {amt-blen} else {0};
-                let aa:Vec<_> = vec![(b.by_ref().take(amt).rev().map(|x|x).collect(),hooh)];
-                let we = self.substitute(&*prog,hooh,0,Rc::new(aa));
+                let we = self.substitute(&*prog,hooh,0,Rc::new(vec![(b.by_ref().take(amt).rev().map(|x|x).collect(),hooh)]));
                 if amt<blen {self.get_applied(we,b.collect())}
                 else if amt>blen {self.get_transferstack(we,hooh)}
                 else {we}
@@ -234,7 +316,7 @@ impl ExpressionBuilder {
                         let w = a.iter().map(|b|self.substitute(b,amt,lim,sub.clone())).collect();
                         self.get_switch(u,w)
                     }
-                    Some(Some(u))=>self.substitute(&a[u],amt,lim,sub),
+                    Some(Some(u))=>self.substitute(&a[u],amt,lim,sub)
                 }
             }
             Deconstruct(x,y,a)=>{
@@ -253,6 +335,124 @@ impl ExpressionBuilder {
             }
         }
     }
+
+
+// impl<'a> DslHoused for (&Dsl,usize,usize,&'a Cell<bool>) {
+//     fn increaseAbstraction(&mut self,b:usize) {self.1+=1}
+//     fn act(&mut self,builder:&mut ExpressionBuilder,a:&Dsl)->Option<Dsl> {
+//         if if self.1==0 {self.0==a} else {ExpressionBuilder::bumpedeq(self.0,self.1,0,a)} {
+//             self.3.set(true);
+//             Some(BaseValue(self.2))
+//         } else {None}
+//     }
+// }
+
+    pub fn nonvariablereasoning(&mut self,a:&Dsl,b:&Dsl,dchange:usize,c:&Skeleton) -> (Dsl,Skeleton,bool) {
+        let mut over = Hole;
+        if if dchange==0 {b==a} else {ExpressionBuilder::bumpedeq(b,dchange,0,a)} {
+            match c {
+                Hole=>{}
+                Exact(e)=>{return (BaseValue(*e),Exact(*e),true);}
+                Constsk(_,_)=>{over=c.clone()}
+            }
+        }
+        match a {
+            RecursivePlaceholder=>(RecursivePlaceholder,over,false),
+            AccessStack(i)=>(AccessStack(*i),over,false),
+            TransferStack(a,bl)=>{
+                let (whatev,_,ch) = self.nonvariablereasoning(a,b,dchange+*bl,c);
+                (self.get_transferstack(whatev,*bl),over,ch)
+            }
+            ApplyStack(a,l)=>{
+                let mut ch=false;
+                let lp=l.iter().map(|x|{
+                    let (x,_,chn) = self.nonvariablereasoning(x,b,dchange,c);
+                    if !chn {ch=false;} x
+                }).collect();
+                let (we,_,chn) = self.nonvariablereasoning(a,b,dchange,c);
+                if !chn {ch=false;}
+                (self.get_applied(we,lp),over,ch)
+            }
+            BaseValue(a)=>(BaseValue(*a),Exact(*a),false),
+            Construct(x,a)=>{
+                let mut ch=false;
+                let mut ex=true;
+                let (w,v) : (Vec<_>,Vec<_>) = a.iter().map(|b|{
+                    let (x,y,chn) = self.nonvariablereasoning(b,b,dchange,c);
+                    if let Exact(_)=y {} else {ex=false;}
+                    if !chn {ch=false;} (x,y)
+                }).unzip();
+                (self.get_construct_prog(*x,w),if ex {
+                    Exact(self.get_constructed(*x,v.into_iter().map(|j|if let Exact(j)=j {j} else {panic!()}).collect()))
+                } else {
+                    Constsk(*x,v)
+                },ch)
+            }
+            SwitchValue(cl,a)=>{
+                let (u,pat,mut ch) = self.nonvariablereasoning(cl,b,dchange,c);
+                match self.switch_short(&u) {
+                    Some(None) => (BaseValue(0),Hole,true),
+                    None=>match pat {
+                        Hole=>{
+                            let mut pat = None;
+                            let mut w = Vec::new();
+                            for b in a.iter() {
+                                let (x,npat,chn) = self.nonvariablereasoning(b,b,dchange,c);
+                                pat = Some(match pat {
+                                    None=>npat,
+                                    Some(x)=>npat.common(x,self)
+                                });
+                                if !chn {ch=false;}
+                                w.push(x);
+                            };
+                            (self.get_switch(u,w),pat.unwrap(),ch)
+                        }
+                        Exact(e)=>match &self.values[e].0 {
+                            Const(g,_)=>{
+                                let ar = &a[self.constructors[*g].index];
+                                let (a,b,_)=self.nonvariablereasoning(ar,b,dchange,c);
+                                (a,b,true)
+                            }
+                            _=>panic!()
+                        }
+                        Constsk(g,_)=>{
+                            let (a,b,_)=self.nonvariablereasoning(&a[self.constructors[g].index],b,dchange,c);
+                            (a,b,true)
+                        }
+                    },
+                    Some(Some(u))=>self.nonvariablereasoning(&a[u],b,dchange,c),
+                }
+            }
+            Deconstruct(x,y,a)=>{
+                let (w,v,c) = self.nonvariablereasoning(a,b,dchange,c);
+                let v = match v {
+                    Hole=>Hole,
+                    Exact(e)=>match &self.values[e].0 {
+                        Const(g,gl)=>{
+                            if *g != *x {return (BaseValue(0),Hole,true)}
+                            Exact(gl[*y])
+                        }
+                        _=>panic!()
+                    }
+                    Constsk(g,mut gl)=>{
+                        if g != *x {return (BaseValue(0),Hole,true)}
+                        gl.remove(*y)
+                    }
+                };
+                (self.get_deconstructor(*x,*y,w),v,c)
+            }
+            EqProg(a,bl)=>{
+                let (u,_,c1) = self.nonvariablereasoning(a,b,dchange,c);
+                let (v,_,c2) = self.nonvariablereasoning(bl,b,dchange,c);
+                (self.get_eq(u,v),over,c1||c2)
+            }
+            NeqProg(a,bl)=>{
+                let (u,_,c1) = self.nonvariablereasoning(a,b,dchange,c);
+                let (v,_,c2) = self.nonvariablereasoning(bl,b,dchange,c);
+                (self.get_neq(u,v),over,c1||c2)
+            }
+        }
+    }
     pub fn bbump(a:&Box<Dsl>,amt:usize,lim:usize) -> Box<Dsl> {Box::new(Self::bump(&(*a),amt,lim))}
     pub fn bump(a:&Dsl,amt:usize,lim:usize) -> Dsl {
         match a {
@@ -266,6 +466,21 @@ impl ExpressionBuilder {
             Deconstruct(x,y,a)=>Deconstruct(*x,*y,Self::bbump(a,amt,lim)),
             NeqProg(a,b)=>NeqProg(Self::bbump(a,amt,lim),Self::bbump(b,amt,lim)),
             EqProg(a,b)=>EqProg(Self::bbump(a,amt,lim),Self::bbump(b,amt,lim))
+        }
+    }
+    pub fn bumpedeq(a:&Dsl,amt:usize,lim:usize,b:&Dsl) -> bool {
+        match (a,b) {
+            (RecursivePlaceholder,RecursivePlaceholder)=>true,
+            (AccessStack(a),AccessStack(b))=> *b==if *a>=lim {*a+amt} else {*a},
+            (TransferStack(ax,ay),TransferStack(bx,by))=>ay==by && Self::bumpedeq(ax,amt,lim+*ay,bx),
+            (ApplyStack(ax,ay),ApplyStack(bx,by))=>Self::bumpedeq(ax,amt,lim,bx) && ay.iter().zip(by.iter()).all(|(a,b)|Self::bumpedeq(a,amt,lim,b)),
+            (BaseValue(a),BaseValue(b))=>a==b,
+            (Construct(ax,ay),Construct(bx,by))=>ax==bx && ay.iter().zip(by.iter()).all(|(a,b)|Self::bumpedeq(a,amt,lim,b)),
+            (SwitchValue(ax,ay),SwitchValue(bx,by))=>ax==bx && ay.iter().zip(by.iter()).all(|(a,b)|Self::bumpedeq(a,amt,lim,b)),
+            (Deconstruct(ax,ay,az),Deconstruct(bx,by,bz))=>ax==bx && ay==by && Self::bumpedeq(az,amt,lim,bz),
+            (NeqProg(ax,ay),NeqProg(bx,by))=>Self::bumpedeq(ax,amt,lim,bx) && Self::bumpedeq(ay,amt,lim,by),
+            (EqProg(ax,ay),EqProg(bx,by))=>Self::bumpedeq(ax,amt,lim,bx) && Self::bumpedeq(ay,amt,lim,by),
+            _=>false
         }
     }
 }

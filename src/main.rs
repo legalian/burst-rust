@@ -2,26 +2,28 @@
 
 #![allow(dead_code)]
 mod mlsparser;
-mod ntfa;
+mod nfta;
 mod nftabuilder;
 mod cluster;
-mod graph;
 mod queue;
 mod spec;
+mod simplespec;
 mod dsl;
 mod debug;
 mod debug2;
 mod synthesis;
 mod newsynthesis;
 mod acceptingrun;
-mod simplify;
 mod intersect;
+
+mod afta;
 
 use std::ffi::OsStr;
 use std::fs::read_dir;
 use dsl::interpret_file;
 use synthesis::synthesize;
 // use newsynthesis::new_synthesize;
+// use afta::new_synthesize;
 use std::path::PathBuf;
 use std::time::{Instant};
 

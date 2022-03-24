@@ -14,7 +14,9 @@ use ProcValue::{*};
 use std::cmp::Ordering;
 use Ordering::{*};
 use TermClassification::{*};
-// use std::hash::{Hash, Hasher};
+use crate::spec::{*};
+// use RefineLiteral::{*};
+use std::hash::{Hash};
 
 #[derive(Copy,Clone,PartialEq,Eq,Hash,Debug)]
 pub enum Transition {
@@ -78,10 +80,10 @@ impl Ord for Transition {
 }
 
 use Transition::{*};
-pub struct NTFABuilder {
+pub struct NFTABuilder<T> {
     pub input_type:usize,
     pub output_type:usize,
-    pub paths:Vec<(Vec<(Transition,Vec<usize>)>,Option<usize>,Vec<(usize,(usize,TermClassification))>)>,//inner vec must be sorted
+    pub paths:Vec<(Vec<(Transition,Vec<usize>)>,Option<usize>,Vec<(usize,T)>)>,//inner vec must be sorted
     // pub revhash:HashMap<u64,Vec<usize>>,
     pub intersect_memo:HashMap<(usize,usize),Option<usize>>,//left side of key is less than right side
     // pub rename_memo:HashMap<(usize,Vec<usize>),usize>,
@@ -90,7 +92,7 @@ pub struct NTFABuilder {
     pub purgeset:HashSet<usize>
 }
 
-impl NTFABuilder {
+impl<T:Clone> NFTABuilder<T> {
     pub fn purge(&mut self,h:usize) {
         let mut stack : Vec<usize> = vec![h];
         while let Some(z) = stack.pop() {
@@ -106,35 +108,35 @@ impl NTFABuilder {
             }
         }
     }
-    pub fn get_ntfa(&mut self,mut deps:Vec<(Transition,Vec<usize>)>,interp:Vec<(usize,(usize,TermClassification))>)->usize {
-        if deps.len()==0 {panic!()}
-        deps.sort_unstable();
-        deps.dedup();
-        // match self.revhash.entry(deps) {
-        //     Occupied(x)=>*x.get(),
-        //     Vacant(x)=>{
-        //         let i=self.paths.len();
-        //         // if NTFABuilder::check_requires_further(x.key()) {
-        //         //     self.minification_queue.push(i);
-        //         // }
-        //         self.paths.push(x.key().clone());
-        //         x.insert(i); i
-        //     }
-        // }
-        let k = deps.iter().filter_map(|(_,r)| if let Some(p) = r.iter().map(|z|self.paths[*z].1).reduce(|x,y|match (x,y) {
-            (Some(x),Some(y)) => Some(x+y),
-            _ => None
-        }) {p.map(|p|p+1)} else {Some(1)}).min();
-        let i=self.paths.len();
-        self.paths.push((deps,k,interp)); i
-    }
+    // pub fn get_nfta(&mut self,mut deps:Vec<(Transition,Vec<usize>)>,interp:Vec<(usize,T)>)->usize {
+    //     if deps.len()==0 {panic!()}
+    //     deps.sort_unstable();
+    //     deps.dedup();
+    //     // match self.revhash.entry(deps) {
+    //     //     Occupied(x)=>*x.get(),
+    //     //     Vacant(x)=>{
+    //     //         let i=self.paths.len();
+    //     //         // if NFTABuilder::check_requires_further(x.key()) {
+    //     //         //     self.minification_queue.push(i);
+    //     //         // }
+    //     //         self.paths.push(x.key().clone());
+    //     //         x.insert(i); i
+    //     //     }
+    //     // }
+    //     let k = deps.iter().filter_map(|(_,r)| if let Some(p) = r.iter().map(|z|self.paths[*z].1).reduce(|x,y|match (x,y) {
+    //         (Some(x),Some(y)) => Some(x+y),
+    //         _ => None
+    //     }) {p.map(|p|p+1)} else {Some(1)}).min();
+    //     let i=self.paths.len();
+    //     self.paths.push((deps,k,interp)); i
+    // }
 
     pub fn get_placeholder(&mut self)->usize {
         self.paths.push((Vec::new(),None,Vec::new()));
         self.paths.len()-1
     }
 
-    pub fn insert_into_placeholder(&mut self,mut deps:Vec<(Transition,Vec<usize>)>,i:usize,interp:Vec<(usize,(usize,TermClassification))>)->usize {
+    pub fn insert_into_placeholder(&mut self,mut deps:Vec<(Transition,Vec<usize>)>,i:usize,interp:Vec<(usize,T)>)->usize {
         if deps.len()==0 {panic!()}
         deps.sort_unstable();
         deps.dedup();
@@ -157,56 +159,7 @@ impl NTFABuilder {
     }
 }
 
-
-
-
-// pub type NTFA = usize;
-// #[derive(Default)]
-// pub struct ValueMapper {
-//     // pub recursion:HashMap<usize,HashSet<usize>>,
-//     // truthiness:HashMap<usize,bool>,
-//     pub statemap:HashMap<usize,Vec<(usize,usize)>>
-// }
-
-
-// //dimensions: {interpretation:[options]}
-
-
-// impl ValueMapper {
-//     fn new()->Self {
-//         ValueMapper {
-//             statemap:HashMap::new(),
-//             // recursion:HashMap::new(),
-//             // // truthiness:HashMap::new(),
-//             // remap:HashMap::new()
-//         }
-//     }
-//     fn union(&mut self,a:usize,b:Vec<usize>) {
-//         let r : Vec<_> = b.iter().map(|z|self.statemap[z]).flatten().collect();
-//         self.statemap.insert(a,r);
-//     }
-// }
-
-
-        // 0:unit        (0)
-        // 1:input       (0)
-
-        // 2:pair        (2)
-
-        // 3:fst         (1)
-        // 4:snd         (1)
-        // 7:unl         (1)
-        // 8:unr         (1)
-
-        // 9:switch      (3)
-
-        // 5:inl         (1)
-        // 6:inr         (1)
-
-        // 10:recursion  (1)
-        // 11-onwards: free space!
-
-impl NTFABuilder {
+impl<T> NFTABuilder<T> {
 
     // Constant(usize),
     // ArbitraryFunc(usize),
@@ -224,8 +177,8 @@ impl NTFABuilder {
     // BaseValue(usize),
     // SwitchValue(Box<Dsl>,Vec<Dsl>),
 
-    pub fn debug_is_accepting_run(&self,ntfa:usize,d:&Dsl,ex:&ExpressionBuilder)->bool {
-        if ntfa==0 {return true;}
+    pub fn debug_is_accepting_run(&self,nfta:usize,d:&Dsl,ex:&ExpressionBuilder)->bool {
+        if nfta==0 {return true;}
         let (dslf,dsla) = match d {
             AccessStack(0)=>(Input,Vec::new()),
             BaseValue(x)=>(Constant(*x),Vec::new()),
@@ -242,7 +195,7 @@ impl NTFABuilder {
             },
             _=>panic!()
         };
-        for (f,a) in self.paths[ntfa].0.iter() {
+        for (f,a) in self.paths[nfta].0.iter() {
             if *f==dslf {
                 if dsla.iter().zip(a.iter()).all(|(da,fa)|
                     self.debug_is_accepting_run(*fa,da,ex)
@@ -283,16 +236,48 @@ pub enum TermClassification {
     Introduction,
     Elimination
 }
-#[derive(Default)]
-pub struct PartialNTFA {
-    pub rules:HashMap<(usize,TermClassification),Vec<(Transition,Vec<(usize,TermClassification)>)>>,
-    // occurances:HashMap<usize,HashSet<usize>>,
+#[derive(Default,Clone)]
+pub struct PartialNFTA<N> {
+    pub rules:HashMap<N,Vec<(Transition,Vec<N>)>>,
+    recursive:HashMap<N,HashSet<N>>,
     // maxins:usize,
     // vm:ValueMapper
 }
-impl PartialNTFA {
-    pub fn new()->Self {PartialNTFA{rules:HashMap::new()}}
-    pub fn add_rule(&mut self,f:Transition,a:Vec<(usize,TermClassification)>,r:(usize,TermClassification)) {
+impl PartialNFTA<(usize,TermClassification)> {
+    pub fn refine(&mut self,a:usize,lit:RefineLiteral) {
+        if let Some(z) = self.recursive.get_mut(&(a,Introduction)) {
+            z.retain(|ff|if lit.accepts(ff.0) {true} else {
+                self.rules.get_mut(ff).unwrap().retain(|(hhf,hhv)|if let Recursion = hhf {hhv[0].0 != a} else {true});
+                false
+            });
+        }
+        if let Some(z) = self.recursive.get_mut(&(a,Elimination)) {
+            z.retain(|ff|if lit.accepts(ff.0) {true} else {
+                self.rules.get_mut(ff).unwrap().retain(|(hhf,hhv)|if let Recursion = hhf {hhv[0].0 != a} else {true});
+                false
+            });
+        }
+    }
+}
+
+pub struct NoMapping;
+pub trait AcceptableMap<N,L> {
+    fn rem(&mut self,a:N)->L;
+    fn def()->N;
+}
+impl AcceptableMap<(usize,TermClassification),usize> for NoMapping {
+    fn rem(&mut self,a:(usize,TermClassification))->usize {a.0}
+    fn def()->(usize,TermClassification) {
+        return (0,Introduction);
+    }
+}
+
+impl<N:Hash+Eq+Copy+Ord> PartialNFTA<N> {
+    pub fn new()->Self {PartialNFTA{rules:HashMap::new(),recursive:HashMap::new()}}
+    pub fn add_rule(&mut self,f:Transition,a:Vec<N>,r:N) {
+        if let Recursion = f {
+            self.recursive.entry(a[0]).or_default().insert(r);
+        }
         // let mut m=r;
         // for a in a.iter() {
         //     if *a>m {m=*a;}
@@ -301,25 +286,25 @@ impl PartialNTFA {
         // if m>=self.maxins {self.maxins=m+1;}
         self.rules.entry(r).or_default().push((f,a));
     }
-    pub fn convert(self,builder:&mut NTFABuilder,accstates:&Vec<(usize,TermClassification)>,interp:usize)->Vec<usize> {
+    pub fn convert<L:Clone,M:AcceptableMap<N,L>>(&self,builder:&mut NFTABuilder<L>,accstates:&Vec<N>,interp:usize,mut mapper:M)->Vec<usize> {
         #[derive(Debug)]
-        struct ArtificialStack {
+        struct ArtificialStack<N> {
             outercollect: Vec<(Transition,Vec<usize>)>,
             innercollect: Vec<usize>,
-            outertrav: IntoIter<(Transition,Vec<(usize,TermClassification)>)>,
-            innertrav: Vec<(usize,TermClassification)>,
+            outertrav: IntoIter<(Transition,Vec<N>)>,
+            innertrav: Vec<N>,
             innertoken: Transition,
             // target: usize,
             place: usize,
             // types: InvType
         }
         let mut extrapass = Vec::new();
-        let mut memo:HashMap<(usize,TermClassification),Option<usize>> = HashMap::new();
-        memo.insert((0,Introduction),Some(0));
+        let mut memo:HashMap<N,Option<usize>> = HashMap::new();
+        memo.insert(M::def(),Some(0));
         let mut result = Vec::new();
-        for accstate in accstates.iter().copied() {
+        for accstate in accstates.iter().cloned() {
             // println!("STATE BOUNDARY -=-=-=-=--=-=-=-=-=-=-=-=-=-=-=");
-            let mut stack:Vec<ArtificialStack> = Vec::new();
+            let mut stack:Vec<ArtificialStack<N>> = Vec::new();
             let place = match memo.entry(accstate) {
                 Occupied(z)=>{
                     if let Some(w) = *z.get() {
@@ -402,7 +387,7 @@ impl PartialNTFA {
                             None=>accstate
                         };
                         let rpv = if ff.outercollect.len()==0 {None} else {
-                            let u = builder.insert_into_placeholder(ff.outercollect,ff.place,vec![(interp,lastval)]);
+                            let u = builder.insert_into_placeholder(ff.outercollect,ff.place,vec![(interp,mapper.rem(lastval))]);
                             extrapass.push(u);
                             Some(u)
                         };
