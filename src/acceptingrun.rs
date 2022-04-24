@@ -12,7 +12,7 @@ use crate::dsl::{*};
 use crate::nftabuilder::{*};
 use std::cmp::Ordering;
 use Ordering::{*};
-use Dsl::{*};
+// use Dsl::{*};
 use Transition::{*};
 
 pub trait SpecLike:Sized+Clone+Eq+Ord {
@@ -30,6 +30,34 @@ impl SpecLike for usize {
 
 // "each assignment you contain can also be nested inside an assignment in the other"
 
+
+#[derive(Clone,PartialEq,Eq,Hash,Debug)]
+pub enum AcceptingRunKind {
+    GetInput,
+    ApplyRecursive(Box<AcceptingRun>),
+    Deconstruct(usize,usize,Box<AcceptingRun>),
+    CustomFunc(usize,Vec<AcceptingRun>),
+    Construct(usize,Vec<AcceptingRun>),
+    SwitchValue(Box<AcceptingRun>,Vec<AcceptingRun>),
+}
+use AcceptingRunKind::{*};
+#[derive(Clone,PartialEq,Eq,Hash,Debug)]
+pub struct AcceptingRun {
+    pub kind:AcceptingRunKind,
+    pub node:usize,
+}
+impl AcceptingRun {
+    pub fn get_dsl(&self,builder:&ExpressionBuilder) -> Dsl {
+        match &self.kind {
+            GetInput=>Dsl::AccessStack(0),
+            ApplyRecursive(x)=>Dsl::ApplyStack(Box::new(Dsl::RecursivePlaceholder),vec![x.get_dsl(builder)]),
+            Deconstruct(x,y,z)=>Dsl::Deconstruct(*x,*y,Box::new(z.get_dsl(builder))),
+            CustomFunc(w,v)=>Dsl::ApplyStack(Box::new(Dsl::BaseValue(builder.functions[*w].concval)),v.iter().map(|x|x.get_dsl(builder)).collect()),
+            AcceptingRunKind::Construct(x,z)=>Dsl::Construct(*x,z.iter().map(|x|x.get_dsl(builder)).collect()),
+            SwitchValue(x,y)=>Dsl::SwitchValue(Box::new(x.get_dsl(builder)),y.iter().map(|x|x.get_dsl(builder)).collect()),
+        }
+    }
+}
 
 #[derive(Debug)]
 enum Assignment<L:SpecLike> {
@@ -140,7 +168,7 @@ impl<L:SpecLike> NFTABuilder<L> {
         &self,
         start:Vec<usize>,
         builder:&mut ExpressionBuilder
-    ) -> (Dsl,usize,Vec<(L,L)>) {
+    ) -> (AcceptingRun,usize,Vec<(L,L)>) {
         let mut queue : BinaryHeap<SolutionStatusWrap<L>> = BinaryHeap::new();
         for s in start.iter() {
             queue.push(SolutionStatusWrap(*s,0,None));
@@ -206,7 +234,7 @@ impl<L:SpecLike> NFTABuilder<L> {
         &self,
         start:Vec<usize>,
         builder:&mut ExpressionBuilder
-    ) -> Vec<(Dsl,usize,Vec<(L,L)>)> {
+    ) -> Vec<(AcceptingRun,usize,Vec<(L,L)>)> {
         let mut queue : BinaryHeap<SolutionStatusWrap<L>> = BinaryHeap::new();
         for s in start.iter() {
             queue.push(SolutionStatusWrap(*s,0,None));
@@ -276,10 +304,9 @@ impl<L:SpecLike> NFTABuilder<L> {
 
 #[derive(Clone,Debug)]
 struct SolutionStatus<L:SpecLike> {
-    dsl:Dsl,
+    dsl:AcceptingRun,
     size:usize,
-    mapping:Option<Rc<Assignment<L>>>,
-    node:usize
+    mapping:Option<Rc<Assignment<L>>>
 }
 #[derive(Debug)]
 struct SolutionStatusWrap<L:SpecLike>(usize,usize,Option<SolutionStatus<L>>);
@@ -325,8 +352,8 @@ impl<L:SpecLike> SolutionStatus<L> {
         // let ex = v.iter().map(|x|&x.value).collect::<Vec<_>>();
         let mut mapping = v.iter().fold(None,|a,x|nondisjoint_assignment_union(a,x.mapping.clone()));
         if let Recursion=a {
-            let oup = &nfta.paths[x].2;
-            for (f,in_l) in nfta.paths[v[0].node].2.iter() {
+            let oup = &nfta.paths[v[0].dsl.node].2;
+            for (f,in_l) in nfta.paths[x].2.iter() {
                 let out_l = match oup.iter().find(|(z,_)|z==f){
                     None=>{continue;}
                     Some((_,z))=>z
@@ -339,16 +366,16 @@ impl<L:SpecLike> SolutionStatus<L> {
         }
         let mut v = v.iter().map(|x|x.dsl.clone()).collect::<Vec<_>>();
         let dsl = match a {
-            Constant(x)=>BaseValue(x),
-            ArbitraryFunc(w)=>ApplyStack(Box::new(BaseValue(builder.functions[w].concval)),v),
-            Recursion=>ApplyStack(Box::new(RecursivePlaceholder),v),
+            // Constant(x)=>BaseValue(x),
+            ArbitraryFunc(w)=>CustomFunc(builder.functions[w].concval,v),
+            Recursion=>ApplyRecursive(Box::new(v.remove(0))),
             Switch(_)=>SwitchValue(Box::new(v.remove(0)),v),
-            Input=>AccessStack(0),
-            Transition::Construct(x)=>Dsl::Construct(x,v),
+            Input=>GetInput,
+            Transition::Construct(x)=>AcceptingRunKind::Construct(x,v),
             Destruct(x,y)=>Deconstruct(x,y,Box::new(v.remove(0))),
         };
         SolutionStatus {
-            dsl,size,mapping,node:x
+            dsl:AcceptingRun {kind:dsl,node:x},size,mapping
         }
     }
 
@@ -369,7 +396,7 @@ impl<L:SpecLike> SolutionStatus<L> {
             None=>{return None;}
         };
         if let Recursion=a {
-            let oup = &nfta.paths[v[0].node].2;
+            let oup = &nfta.paths[v[0].dsl.node].2;
             for (f,out_l) in nfta.paths[x].2.iter() {
                 let in_l = match oup.iter().find(|(z,_)|z==f){
                     None=>{continue;}
@@ -390,16 +417,16 @@ impl<L:SpecLike> SolutionStatus<L> {
         }
         let mut v = v.iter().map(|x|x.dsl.clone()).collect::<Vec<_>>();
         let dsl = match a {
-            Constant(x)=>BaseValue(x),
-            ArbitraryFunc(w)=>ApplyStack(Box::new(BaseValue(builder.functions[w].concval)),v),
-            Recursion=>ApplyStack(Box::new(RecursivePlaceholder),v),
+            // Constant(x)=>BaseValue(x),
+            ArbitraryFunc(w)=>CustomFunc(builder.functions[w].concval,v),
+            Recursion=>ApplyRecursive(Box::new(v.remove(0))),
             Switch(_)=>SwitchValue(Box::new(v.remove(0)),v),
-            Input=>AccessStack(0),
-            Transition::Construct(x)=>Dsl::Construct(x,v),
+            Input=>GetInput,
+            Transition::Construct(x)=>AcceptingRunKind::Construct(x,v),
             Destruct(x,y)=>Deconstruct(x,y,Box::new(v.remove(0))),
         };
         Some(SolutionStatus {
-            dsl,size,mapping,node:x
+            dsl:AcceptingRun {kind:dsl,node:x},size,mapping
         })
     }
 

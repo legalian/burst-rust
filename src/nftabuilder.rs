@@ -170,8 +170,8 @@ impl ExpressionBuilder {
             }
         }
     }
-    pub fn evaluate_solitary(&mut self,a:&Dsl,arg:usize) -> Option<usize> {
-        match self.substitute(&a,0,0,Rc::new(vec![(vec![BaseValue(arg)],0)])) {
+    pub fn evaluate_solitary(&mut self,a:&Dsl,arg:&[usize]) -> Option<usize> {
+        match self.substitute(&a,0,0,Rc::new(vec![(arg.iter().map(|j|BaseValue(*j)).collect(),0)])) {
             BaseValue(y)=>Some(y),
             _=>None
             // k=>panic!("failed to resolve to concrete value! \nfunction: {:#?}\n{:?}\n{:?}\n",a,DebugValue{t:arg,expr:self},k)
@@ -190,7 +190,7 @@ impl ExpressionBuilder {
             return *z;
         }
         let trsh = self.temporary_recursive_memo.as_ref().unwrap().1.clone();
-        let res = match self.evaluate_solitary(&trsh,arg){
+        let res = match self.evaluate_solitary(&trsh,&[arg]){
             Some(z)=>{self.temporary_recursive_memo.as_ref().unwrap().0.borrow_mut().insert(arg,z);z},
             None=>panic!()
         };
@@ -532,7 +532,10 @@ impl NFTABuilder<usize> {
         // previous_accepting_states.insert(input,accepting_states);
         // }
         // let res = graph_buffer.remove(&input).unwrap();
-        // println!("converting... {} states...",res.rules.len());
+        println!("converting... {} states...",res.rules.len());
+        println!("accepting: {:?}",accepting_states);
+        println!("is: {:#?}",res);
+
         res.convert(self,&accepting_states.iter().copied().collect(),interp,NoMapping)
     }
 }

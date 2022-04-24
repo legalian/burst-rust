@@ -52,7 +52,7 @@ impl<T:Debug> NFTABuilder<T> {
                     // Switch(_)=>buffer.write_str("switch"),
                     // Recursion=>buffer.write_str("recursion"),
                     // ArbitraryFunc(_)=>buffer.write_str("func")
-                    Constant(x)=>buffer.write_fmt(format_args!("const[{:?}]",x)),
+                    // Constant(x)=>buffer.write_fmt(format_args!("const[{:?}]",x)),
                     Input=>buffer.write_str("input"),
                     Destruct(c,i)=>buffer.write_fmt(format_args!("destruct[{},{}]",c,i)),
                     Transition::Construct(c)=>buffer.write_fmt(format_args!("construct[{}]",c)),
@@ -86,7 +86,7 @@ struct DebugNFTAline<'a,T:Debug> {
 impl<'a,T:Debug> Debug for DebugNFTAline<'a,T> {
     fn fmt(&self, f: &mut Formatter) -> Result<(),Error> {
         match self.token {
-            Constant(x)=>f.write_fmt(format_args!("const[{:?}]",DebugValue{t:x,expr:self.expr})),
+            // Constant(x)=>f.write_fmt(format_args!("const[{:?}]",DebugValue{t:x,expr:self.expr})),
             Input=>f.write_str("input"),
             Destruct(c,i)=>f.write_fmt(format_args!("destruct[{},{}]",c,i)),
             Transition::Construct(c)=>f.write_fmt(format_args!("construct[{}]",c)),
@@ -117,7 +117,7 @@ struct NFTAline<'a,T:Debug> {
 impl<'a,T:Debug> Debug for NFTAline<'a,T> {
     fn fmt(&self, f: &mut Formatter) -> Result<(),Error> {
         match self.token {
-            Constant(x)=>f.write_fmt(format_args!("const[{:?}]",x)),
+            // Constant(x)=>f.write_fmt(format_args!("const[{:?}]",x)),
             Input=>f.write_str("input"),
             Destruct(c,i)=>f.write_fmt(format_args!("destruct[{},{}]",c,i)),
             Transition::Construct(c)=>f.write_fmt(format_args!("construct[{}]",c)),

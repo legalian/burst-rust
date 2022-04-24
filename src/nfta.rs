@@ -6,21 +6,20 @@ use std::collections::HashSet;
 use std::collections::hash_map::Entry::*;
 use std::mem::{take};
 use std::iter::{*};
-use crate::dsl::{*};
 use crate::nftabuilder::{*};
 use std::vec::IntoIter;
-use Dsl::{*};
-use ProcValue::{*};
 use std::cmp::Ordering;
 use Ordering::{*};
 use TermClassification::{*};
 use crate::spec::{*};
+use crate::acceptingrun::{*};
 // use RefineLiteral::{*};
 use std::hash::{Hash};
+use AcceptingRunKind::{*};
 
 #[derive(Copy,Clone,PartialEq,Eq,Hash,Debug)]
 pub enum Transition {
-    Constant(usize),
+    // Constant(usize),
     ArbitraryFunc(usize),
     Destruct(usize,usize),
     Construct(usize),
@@ -31,9 +30,9 @@ pub enum Transition {
 impl PartialOrd for Transition {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         match (self,other) {
-            (Constant(x),Constant(y)) => Some(x.cmp(y)),
-            (Constant(_),_)=>Some(Less),
-            (_,Constant(_))=>Some(Greater),
+            // (Constant(x),Constant(y)) => Some(x.cmp(y)),
+            // (Constant(_),_)=>Some(Less),
+            // (_,Constant(_))=>Some(Greater),
             (ArbitraryFunc(x),ArbitraryFunc(y)) => Some(x.cmp(y)),
             (ArbitraryFunc(_),_)=>Some(Less),
             (_,ArbitraryFunc(_))=>Some(Greater),
@@ -56,9 +55,9 @@ impl PartialOrd for Transition {
 impl Ord for Transition {
     fn cmp(&self,other:&Self) -> Ordering {
         match (self,other) {
-            (Constant(x),Constant(y)) => x.cmp(y),
-            (Constant(_),_)=>Less,
-            (_,Constant(_))=>Greater,
+            // (Constant(x),Constant(y)) => x.cmp(y),
+            // (Constant(_),_)=>Less,
+            // (_,Constant(_))=>Greater,
             (ArbitraryFunc(x),ArbitraryFunc(y)) => x.cmp(y),
             (ArbitraryFunc(_),_)=>Less,
             (_,ArbitraryFunc(_))=>Greater,
@@ -177,23 +176,16 @@ impl<T> NFTABuilder<T> {
     // BaseValue(usize),
     // SwitchValue(Box<Dsl>,Vec<Dsl>),
 
-    pub fn debug_is_accepting_run(&self,nfta:usize,d:&Dsl,ex:&ExpressionBuilder)->bool {
+    pub fn debug_is_accepting_run(&self,nfta:usize,d:&AcceptingRun,ex:&ExpressionBuilder)->bool {
         if nfta==0 {return true;}
-        let (dslf,dsla) = match d {
-            AccessStack(0)=>(Input,Vec::new()),
-            BaseValue(x)=>(Constant(*x),Vec::new()),
-            SwitchValue(c,b)=>(Switch(b.len()),once(*c.clone()).chain(b.iter().cloned()).collect()),
-            Deconstruct(x,y,a)=>(Destruct(*x,*y),vec![*a.clone()]),
-            Dsl::Construct(x,a)=>(Transition::Construct(*x),a.clone()),
-            ApplyStack(j,b) => match &**j {
-                RecursivePlaceholder => (Recursion,b.clone()),
-                BaseValue(x) => match ex.values[*x].0 {
-                    FuncAsValue(f) => (ArbitraryFunc(f),b.clone()),
-                    _ => panic!()
-                },
-                _ => panic!()
-            },
-            _=>panic!()
+        let (dslf,dsla) = match &d.kind {
+            GetInput=>(Input,Vec::new()),
+            // BaseValue(x)=>(Constant(*x),Vec::new()),
+            AcceptingRunKind::SwitchValue(c,b)=>(Switch(b.len()),once(*c.clone()).chain(b.iter().cloned()).collect()),
+            AcceptingRunKind::Deconstruct(x,y,a)=>(Destruct(*x,*y),vec![*a.clone()]),
+            AcceptingRunKind::Construct(x,a)=>(Transition::Construct(*x),a.clone()),
+            ApplyRecursive(b)=>(Recursion,vec![(**b).clone()]),
+            CustomFunc(f,b) => (ArbitraryFunc(*f),b.clone()),
         };
         for (f,a) in self.paths[nfta].0.iter() {
             if *f==dslf {

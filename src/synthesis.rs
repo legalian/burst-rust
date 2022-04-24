@@ -66,6 +66,7 @@ pub fn synthesize(
             let nfta = disjunct.opnfta.clone().unwrap();
             // nftabuilder.output_tree(nfta);
             let (solution,solsize,witness) = nftabuilder.get_boring_accepting_run(nfta,&mut exprbuilder);
+            let solution = solution.get_dsl(&exprbuilder);
             // let witness : Vec<(usize,usize)> = witness.into_iter().map(|((a,_),(b,_))|(a,b)).collect();
             println!("PARTIAL SOLUTION FOUND: {:#?}  {:?} {:?}",EnhancedPrintDsl{dsl:&solution,expr:&exprbuilder},witness,solsize);//
             // return;
